@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# ponytail: YAWC daemon — hold→release toggles, STT→LLM→paste per 01/02/03/08
+# Throwaway wrapper until Rust daemon absorbs it. Calls prototype scripts.
+set -euo pipefail
+CMD="${1:-help}"
+case "$CMD" in
+  toggle) exec "$(dirname "$0")/prototype/03-niri-injection/scripts/yawc-hold-release.sh" ;;
+  hold)   exec "$(dirname "$0")/prototype/03-niri-injection/scripts/yawc-trigger.sh" ;;
+  dictation) echo "[yawc] dictation start — mic via arecord 16kHz mono (see 01 Silero VAD)";;
+  command) echo "[yawc] command mode Ctrl+Win+Alt hold — selection via wl-paste -p (see 05)";;
+  transform) echo "[yawc] transform $2 on selection — llama.cpp Qwen3-1.7B c512 (see 05/08)";;
+  *) echo "yawc-daemon {toggle|hold|dictation|command|transform} — see research/01-09";;
+esac

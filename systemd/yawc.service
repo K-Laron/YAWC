@@ -1,0 +1,13 @@
+[Unit]
+Description=YAWC dictation daemon — STT hot per 08
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/yawc-daemon dictation
+Restart=on-failure
+RestartSec=2
+Environment=HF_HUB_OFFLINE=1
+
+[Install]
+WantedBy=default.target

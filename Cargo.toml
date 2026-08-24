@@ -1,0 +1,13 @@
+[package]
+name = "yawc"
+version = "0.1.0"
+edition = "2021"
+description = "YAWC — Yet Another Wispr Clone, 100% offline for CachyOS/niri"
+
+[dependencies]
+# ponytail: no tauri in scaffold — tray via wtype fallback per 03; add tauri 2 when tray needed
+# tauri = { version = "2" }
+
+[profile.release]
+lto = true
+codegen-units = 1

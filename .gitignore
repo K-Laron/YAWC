@@ -1,0 +1,14 @@
+# models (download once, never commit)
+models/
+*.onnx
+*.onnx.json
+*.bin
+*.gguf
+
+# local config with mic/hotkey choices
+.config.local.json
+
+# benchmarks
+bench-output/
+
+# wayfinder research branches live as git branches, not files

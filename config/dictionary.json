@@ -1,0 +1,5 @@
+[
+  {"term": "Priya", "hint": "Priya", "lang": "en", "scope": "global", "weight": 1.0},
+  {"term": "kamag-anak", "hint": "kamag anak", "lang": "tl", "scope": "global"},
+  {"term": "hanggang ngayon", "hint": "hanggang ngayon", "lang": "tl", "scope": "global"}
+]

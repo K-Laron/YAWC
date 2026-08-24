@@ -1,0 +1,17 @@
+# ponytail: PKGBUILD skeleton per 09 — AUR for CachyOS rolling
+pkgname=yawc
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="YAWC — Yet Another Wispr Clone, 100% offline for niri"
+arch=('x86_64')
+depends=('wtype' 'wl-clipboard' 'at-spi2-core' 'pipewire')
+makedepends=('cargo' 'python')
+source=()
+sha256sums=()
+
+package() {
+  install -Dm755 yawc-daemon "$pkgdir/usr/bin/yawc-daemon"
+  install -Dm755 target/release/yawc "$pkgdir/usr/bin/yawc"
+  install -Dm644 systemd/yawc.service "$pkgdir/usr/lib/systemd/user/yawc.service"
+}
+# Models fetched via yawc-models fetch (not in package) — ~/.local/share/yawc/models
