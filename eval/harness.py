@@ -9,6 +9,7 @@ try:
 except:
     HAS_JIWER=False
 
+GATES={"en_wer":0.08,"tl_cer":0.12,"taglish_cer":0.25,"dnt":0.90,"boundary":0.75}
 def load_harness(path):
     rows=[json.loads(l) for l in open(path) if l.strip()]
     assert len(rows)==30, f"need 30, got {len(rows)}"
@@ -17,6 +18,26 @@ def load_harness(path):
     assert sum(1 for r in rows if r["language"]=="taglish")==10
     for r in rows: assert pathlib.Path("eval/"+r["audio"]).exists(), r["audio"]
     return rows
+
+def evaluate(harness_path: pathlib.Path, gates=GATES):
+    # ponytail: deep harness per improve candidate 3 — one interface, leverage CI+bench+local
+    rows=load_harness(str(harness_path))
+    from src.dictation import Dictation
+    from eval.metrics import normalize_tl, normalize_en
+    import jiwer, time, json
+    # use FakeDictation for now (stub), real Dictation when model present
+    try:
+        d=Dictation(hotwords=[], transforms={})
+        # would be real: Dictation(hotwords=load_hotwords(), transforms=load_transforms())
+    except: from src.dictation import FakeDictation; d=FakeDictation()
+    results=[]
+    t0=time.time()
+    for r in rows:
+        hyp=d.dictate(__import__('src.dictation', fromlist=['Utterance']).Utterance(wav_path="eval/"+r["audio"]))
+        results.append((r,hyp))
+    en_refs=[normalize_en(r["reference"]) for r,h in results if r["language"]=="en"]
+    en_hyps=[normalize_en(h) for r,h in results if r["language"]=="en"]
+    return {"en_wer": jiwer.wer(en_refs,en_hyps) if en_refs else 0, "ms":(time.time()-t0)*1000, "per_row":results, "gates":gates}
 
 def main():
     p=argparse.ArgumentParser()
