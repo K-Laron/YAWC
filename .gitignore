@@ -12,3 +12,11 @@ models/
 bench-output/
 
 # wayfinder research branches live as git branches, not files
+# build
+target/
+__pycache__/
+*.pyc
+.opencode/
+eval/audio/
+runs/
+eval/harness.jsonl
