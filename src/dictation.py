@@ -19,15 +19,18 @@ class Dictation:
         self.hotwords_str = " ".join(hotwords)
 
     def dictate(self, u: Utterance) -> str:
-        # ponytail: locality — Backtrack fix concentrates here
+        # ponytail: locality — Backtrack fix concentrates here, pill state via src/pill
+        try: import src.pill as pill; pill.recording(1)
+        except: pass
         raw = self._transcribe(u.wav_path)
+        try: import src.pill as pill; pill.transcribing()
+        except: pass
         ctx = self._get_context(u)
-        # 500 guard per 05
-        if len(raw) > 500:
-            raw = raw[:500]
-        if u.transform_mode:
-            return self._transform(raw, u.transform_mode, ctx)
-        return self._polish(raw, ctx)
+        if len(raw) > 500: raw = raw[:500]
+        res = self._transform(raw, u.transform_mode, ctx) if u.transform_mode else self._polish(raw, ctx)
+        try: import src.pill as pill; pill.polished(res)
+        except: pass
+        return res
 
     def _transcribe(self, wav_path: str) -> str:
         try:
