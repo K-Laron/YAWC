@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 # ponytail: pill overlay — GTK4 layer-shell on any app (niri OVERLAY, top 20)
 # Writes via src/pill.py /tmp/yawc-pill.state, this overlay renders it above any app
-import gi, pathlib, json, os
+import gi, os, sys, time, pathlib
 # LD_PRELOAD workaround for gtk4-layer-shell link order per warning
 if "LD_PRELOAD" not in os.environ or "gtk4-layer-shell" not in os.environ["LD_PRELOAD"]:
     os.environ["LD_PRELOAD"] = "/usr/lib/libgtk4-layer-shell.so:" + os.environ.get("LD_PRELOAD","")
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+from src import pill as pill_state
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gtk4LayerShell', '1.0')
 from gi.repository import Gtk, Gtk4LayerShell, GLib
 
-STATE = pathlib.Path("/tmp/yawc-pill.state")
 CSS = b"""
 window { background: transparent; }
 /* class selectors: bare 'pill'/'wave' would match node names, not these classes */
@@ -101,34 +103,25 @@ class PillWindow(Gtk.Window):
         return True
 
     def poll(self):
-        if STATE.exists():
-            try:
-                data=json.loads(STATE.read_text())
-                state=data.get('state','idle')
-                text=data.get('text','')[:50]
-                if state=="recording":
-                    if not self.start_time:
-                        import time; self.start_time = time.time()
-                    self.label.set_label("Listening")
-                    self.wave_box.set_visible(True); self.spinner.set_visible(False); self.spinner.stop()
-                elif state=="transcribing":
-                    self.start_time = 0
-                    self.label.set_label("Transcribing")
-                    self.wave_box.set_visible(False); self.spinner.set_visible(True); self.spinner.start()
-                elif state=="polished":
-                    self.start_time = 0
-                    # UI only — hide transcript text, just show Done
-                    self.label.set_label("✓ Done")
-                    self.wave_box.set_visible(False); self.spinner.set_visible(False); self.spinner.stop()
-                else:
-                    self.label.set_label(text)
-                    self.wave_box.set_visible(False); self.spinner.set_visible(False)
-                self.set_visible(True)
-            except: pass
-        else:
+        # dumb renderer: intents come from pill.ui_for (pure, tested in tests/)
+        ui = pill_state.ui_for(pill_state.parse())
+        self.set_visible(ui["visible"])
+        if not ui["visible"]:
             self.start_time = 0
             self.timer.set_visible(False)
-            self.set_visible(False)
+            return True
+        self.label.set_label(ui["label"])
+        self.wave_box.set_visible(ui["wave"])
+        self.spinner.set_visible(ui["spinner"])
+        if ui["spinner"]:
+            self.spinner.start()
+        else:
+            self.spinner.stop()
+        if ui["timer"] and not self.start_time:
+            self.start_time = time.time()
+        elif not ui["timer"]:
+            self.start_time = 0
+            self.timer.set_visible(False)
         return True
 
 def main():

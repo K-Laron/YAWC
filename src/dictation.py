@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# ponytail: Dictation deep module per improve candidate 1 — Strong
-# interface: dictate(Utterance) -> str, owns STT+Polish+Context, leaves paste outside
-import dataclasses, time, json, pathlib, subprocess
+# ponytail: Dictation deep module — dictate(Utterance) -> str, owns STT+Context+Polish,
+# paste stays outside. Pill states via src/pill. Backtrack/snippets live in polish.
+import dataclasses
 
 @dataclasses.dataclass
 class Utterance:
@@ -9,65 +9,98 @@ class Utterance:
     cursor_left: str = ""
     app_id: str = ""
     title: str = ""
-    transform_mode: str = ""  # 05: concise/reword/structure/custom
-    # ponytail: Data Clumps fix — wav+cursor+app travel together
+    transform_mode: str = ""  # 05: concise/reword/structure/custom/free-text instruction
+
 
 class Dictation:
-    def __init__(self, hotwords: list[str], transforms: dict):
+    def __init__(self, hotwords: str = ""):
         self.hotwords = hotwords
-        self.transforms = transforms
-        self.hotwords_str = " ".join(hotwords)
 
-    def dictate(self, u: Utterance) -> str:
-        # ponytail: locality — Backtrack fix concentrates here, pill state via src/pill
-        try: import src.pill as pill; pill.recording(1)
-        except: pass
+    def dictate(self, u: Utterance, polish: bool = True) -> str:
+        import src.pill as pill
+        pill.transcribing()
         raw = self._transcribe(u.wav_path)
-        try: import src.pill as pill; pill.transcribing()
-        except: pass
-        ctx = self._get_context(u)
-        if len(raw) > 500: raw = raw[:500]
-        res = self._transform(raw, u.transform_mode, ctx) if u.transform_mode else self._polish(raw, ctx)
-        try: import src.pill as pill; pill.polished(res)
-        except: pass
+        if not raw:
+            pill.idle()
+            return ""
+        raw = self._snippets(raw)
+        ctx = self._context(u)
+        if not polish:  # eval --no-polish: score raw STT
+            pill.polished(raw)
+            return raw
+        res = (self._transform(raw, u.transform_mode)
+               if u.transform_mode else self._polish(raw, ctx))
+        pill.polished(res)
         return res
 
     def _transcribe(self, wav_path: str) -> str:
+        from src import stt
         try:
-            from faster_whisper import WhisperModel
-            m = WhisperModel("large-v3-turbo", device="cuda", compute_type="int8_float16", local_files_only=True)
-            segs, _ = m.transcribe(wav_path, language=None, task="transcribe", hotwords=self.hotwords_str, beam_size=5)
-            return " ".join(s.text for s in segs)
-        except:
-            return f"[stub: {wav_path} hotwords={self.hotwords_str[:20]}]"
+            return stt.transcribe(wav_path, hotwords=self.hotwords)
+        except Exception:
+            return ""  # no model yet (downloads later) — degrade silently
 
-    def _get_context(self, u: Utterance) -> str:
-        # 04: if Utterance already has cursor, use it else probe 80ms
-        if u.cursor_left:
-            cat = "Email" if "gmail" in u.title.lower() else "Other"
-            return f'left="{u.cursor_left}" app={cat}'
-        # probe niri + wl-paste per src/yawc_core.get_context (19ms)
+    def _snippets(self, raw: str) -> str:
+        from src import polish
+        return polish.expand_snippets(raw)
+
+    def _context(self, u: Utterance):
+        from src import context
+        if u.cursor_left or u.app_id or u.title:
+            cat = context.categorize(u.app_id, u.title)
+            cursor, ctx = u.cursor_left, None
+        else:
+            ctx = context.get_context(timeout_ms=80)
+            cat, cursor = ctx["cat"], ctx["cursor_left"]
+            self._audit(ctx)
+        return context.CursorContext(cursor_left=cursor, cat=cat)
+
+    def _audit(self, ctx: dict) -> None:
+        # 04: on-device audit log of context reads, 14-day prune — never the text itself
+        import json, time, pathlib
+        log = pathlib.Path.home() / ".local/share/yawc/context.log"
         try:
-            import src.yawc_core as yc
-            ctx = yc.get_context(timeout_ms=80)
-            return f'left="{ctx["cursor_left"]}" app={ctx["cat"]}'
-        except:
-            return 'left="" app=Other'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            now = time.time()
+            lines = []
+            if log.exists():
+                for ln in log.read_text().splitlines():
+                    try:
+                        if now - json.loads(ln)["ts"] < 14 * 86400:
+                            lines.append(ln)
+                    except Exception:
+                        pass
+            lines.append(json.dumps({"ts": int(now), "app": ctx.get("app_id"),
+                                     "cat": ctx.get("cat"), "cursor_len": len(ctx.get("cursor_left", ""))}))
+            log.write_text("\n".join(lines) + "\n")
+        except Exception:
+            pass
 
-    def _polish(self, text: str, ctx: str) -> str:
-        try:
-            import src.yawc_core as yc
-            return yc.llm_polish(text, ctx, timeout_ms=600)
-        except:
-            import src.yawc_core as yc
-            return yc.regex_polish(text)
+    def _polish(self, raw: str, ctx) -> str:
+        from src import polish
+        return polish.llm_polish(raw, ctx, timeout_ms=600)
 
-    def _transform(self, text: str, mode: str, ctx: str) -> str:
-        import src.yawc_core as yc
-        return yc.transform_text(text, mode, ctx)
+    def _transform(self, raw: str, mode: str) -> str:
+        from src import polish
+        return polish.transform_text(raw, mode)
+
 
 class FakeDictation(Dictation):
     # ponytail: fake for tests — in-memory, no VRAM, interface is test surface
-    def __init__(self): super().__init__(hotwords=[], transforms={})
+    def __init__(self): super().__init__()
     def _transcribe(self, wav_path: str) -> str: return "hello stub"
-    def _get_context(self, u: Utterance) -> str: return 'left="" app=Other'
+    def _snippets(self, raw: str) -> str: return raw
+    def _context(self, u: Utterance):
+        from src import context
+        return context.CursorContext()
+    def _polish(self, raw: str, ctx) -> str: return raw
+
+
+def dictate_and_paste(wav_path: str) -> str:
+    # release callback for Recorder — dictate then inject into the focused field
+    from src import polish, injection
+    d = Dictation(hotwords=polish.load_hotwords())
+    out = d.dictate(Utterance(wav_path=wav_path))
+    if out:
+        injection.inject(out, restore=True)
+    return out

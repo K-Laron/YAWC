@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # ponytail: YAWC daemon — hold→release toggles, STT→LLM→paste + pill per 01/02/03/04/05/08
 set -euo pipefail
-# ensure pill overlay on any app (niri layer OVERLAY top 20) — autostart if not running
+# ensure pill overlay on any app (niri layer OVERLAY) — autostart if not running
 if ! pgrep -f pill_overlay.py >/dev/null 2>&1; then
   LD_PRELOAD=/usr/lib/libgtk4-layer-shell.so nohup python3 "$(dirname "$0")/src/pill_overlay.py" >/tmp/yawc-pill.log 2>&1 &
   sleep 0.3
 fi
+cd "$(dirname "$0")"
 CMD="${1:-help}"
 case "$CMD" in
-  toggle) exec "$(dirname "$0")/prototype/03-niri-injection/scripts/yawc-hold-release.sh" ;;
-  hold)   exec "$(dirname "$0")/prototype/03-niri-injection/scripts/yawc-trigger.sh" ;;
-  pill) exec python3 "$(dirname "$0")/src/pill_overlay.py" ;;
-  dictate) python3 -c "from src.dictation import Dictation,Utterance; d=Dictation(['Priya','kamag-anak'],{}); print(d.dictate(Utterance(wav_path='${2:-/tmp/live.wav}')))" ;;
-  command) echo "[yawc] command mode Ctrl+Win+Alt hold — selection via wl-paste -p (see 05)";;
-  transform) echo "[yawc] transform $2 on selection — llama.cpp Qwen3-1.7B c512 (see 05/08)";;
-  *) echo "yawc-daemon {toggle|hold|pill|dictate|command|transform} — pill shows on any app (niri OVERLAY)";;
+  toggle)    exec python3 src/yawc_toggle.py ;;
+  command)   exec python3 src/yawc_command.py ;;
+  pill)      exec python3 src/pill_overlay.py ;;
+  dictate)   python3 src/dictate_cli.py "$2" ;;
+  transform) python3 -c "
+import subprocess, sys
+from src import polish, injection
+sel = subprocess.run(['wl-paste','-p'],capture_output=True,text=True).stdout
+out = polish.transform_text(sel, mode=sys.argv[1])
+print(out)" "${2:-concise}" ;;
+  *) echo "yawc-daemon {toggle|command|pill|dictate [wav]|transform [mode]} — pill on any app (niri OVERLAY)";;
 esac

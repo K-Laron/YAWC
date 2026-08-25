@@ -1,42 +1,48 @@
 #!/usr/bin/env python3
-# ponytail: Injection module per improve candidate 2 — Worth exploring
-# interface: inject(text, restore=True) -> bool, adapters: Wtype vs Ydotool
-import shutil, subprocess, time, os
+# ponytail: Injection — ONE paste shape (wl-copy -> wtype ctrl-v, clipboard restore),
+# password guard always on. ydotool fallback for XWayland per 03.
+import os, shutil, subprocess, time
+
 
 def _is_password_field() -> bool:
-    # 04 excluded: password role / URL bar — stub per 04, real via gi.Atspi check when needed
-    return False
+    # 04 exclusion: never type into password fields
+    try:
+        from src import context
+        return bool(context.get_context(timeout_ms=80).get("is_password"))
+    except Exception:
+        return False
 
-class WtypeAdapter:
-    def inject(self, text: str, restore=True) -> bool:
-        if _is_password_field(): return False
-        orig = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout if os.environ.get("WAYLAND_DISPLAY") else ""
-        subprocess.run(["wl-copy"], input=text, text=True)
-        time.sleep(0.05)
-        try: subprocess.run(["wtype","-M","ctrl","-k","v","-m","ctrl"], timeout=1)
-        except: return False
-        time.sleep(0.05)
-        if restore and orig:
-            subprocess.run(["wl-copy"], input=orig, text=True)
-        return True
 
-class YdotoolAdapter:
-    def inject(self, text: str, restore=True) -> bool:
-        if _is_password_field(): return False
-        # 03 ydotoold fallback per prototype
-        sock = os.environ.get("YDOTOOL_SOCKET","/tmp/.ydotool_socket")
-        os.environ["YDOTOOL_SOCKET"]=sock
-        try:
-            subprocess.run(["ydotool","type", text], timeout=1)
-            return True
-        except: return False
-
-def inject(text: str, restore=True) -> bool:
-    # auto-detect per 03: wtype if WAYLAND_DISPLAY else ydotool
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wtype"):
-        return WtypeAdapter().inject(text, restore)
-    if shutil.which("ydotool"):
-        return YdotoolAdapter().inject(text, restore)
-    # fallback: wl-copy only
+def _wtype_paste(text: str, restore: bool) -> bool:
+    orig = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout \
+        if os.environ.get("WAYLAND_DISPLAY") else ""
     subprocess.run(["wl-copy"], input=text, text=True)
+    time.sleep(0.05)
+    try:
+        subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], timeout=1)
+    except Exception:
+        return False
+    time.sleep(0.05)
+    if restore and orig:
+        subprocess.run(["wl-copy"], input=orig, text=True)
+    return True
+
+
+def _ydotool_paste(text: str, restore: bool) -> bool:
+    os.environ.setdefault("YDOTOOL_SOCKET", "/tmp/.ydotool_socket")
+    try:
+        subprocess.run(["ydotool", "type", text], timeout=1)
+        return True
+    except Exception:
+        return False
+
+
+def inject(text: str, restore: bool = True) -> bool:
+    if not text or _is_password_field():
+        return False
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wtype"):
+        return _wtype_paste(text, restore)
+    if shutil.which("ydotool"):
+        return _ydotool_paste(text, restore)
+    subprocess.run(["wl-copy"], input=text, text=True)  # last resort: clipboard only
     return False
