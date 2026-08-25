@@ -27,7 +27,7 @@ Without models everything still runs — STT returns empty, polish falls back to
 ## 3. Run
 
 ```bash
-systemctl --user enable --now yawc-pill yawc-hold   # pill overlay + Right Alt evdev hold
+systemctl --user enable --now yawc-pill yawc-evdev   # pill overlay + Right Alt evdev hold
 # or niri spawn-at-startup per install.sh snippet
 yawc-daemon toggle                                   # hold→release dictation (niri bind)
 yawc-daemon command                                  # Ctrl+Win+Alt command mode

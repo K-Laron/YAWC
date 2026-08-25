@@ -23,7 +23,7 @@ ln -sf "$PREFIX/yawc-daemon" "$HOME/.local/bin/yawc-daemon"
 
 echo "[3/5] systemd user units"
 mkdir -p "$HOME/.config/systemd/user"
-for u in yawc-pill yawc-hold; do
+for u in yawc-pill yawc-evdev; do
   sed "s|%h/.local/share/yawc|$PREFIX|g" "$SRC/systemd/$u.service" > "$HOME/.config/systemd/user/$u.service"
 done
 systemctl --user daemon-reload
@@ -33,7 +33,7 @@ echo "[4/5] niri binds (add to ~/.config/niri/config.kdl)"
 cat <<'EOF'
 # top-level:
 spawn-at-startup "systemctl" "--user" "start" "yawc-pill"
-spawn-at-startup "systemctl" "--user" "start" "yawc-hold"
+spawn-at-startup "systemctl" "--user" "start" "yawc-evdev"
 # inside binds { }:
 binds {
     Alt+Meta+X   { spawn-sh "yawc-daemon toggle"; }      // hold-to-dictate (fallback; evdev hold is the hot path)
