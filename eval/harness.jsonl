@@ -1,0 +1,30 @@
+{"id": "en_01", "audio": "audio/en_01.wav", "reference": "Can you send me the report before the end of the day", "language": "en"}
+{"id": "en_02", "audio": "audio/en_02.wav", "reference": "I will be ten minutes late because of traffic on EDSA", "language": "en"}
+{"id": "en_03", "audio": "audio/en_03.wav", "reference": "Please add the invoice to this month's expenses", "language": "en"}
+{"id": "en_04", "audio": "audio/en_04.wav", "reference": "The deploy failed again so I am rolling it back now", "language": "en"}
+{"id": "en_05", "audio": "audio/en_05.wav", "reference": "Great meeting everyone let's continue tomorrow morning", "language": "en"}
+{"id": "en_06", "audio": "audio/en_06.wav", "reference": "My flight lands at nine so pick me up around half past", "language": "en"}
+{"id": "en_07", "audio": "audio/en_07.wav", "reference": "Kenneth approved the budget for the new laptops", "language": "en"}
+{"id": "en_08", "audio": "audio/en_08.wav", "reference": "Do not forget to back up the database before the migration", "language": "en"}
+{"id": "en_09", "audio": "audio/en_09.wav", "reference": "The client wants three revisions by Friday afternoon", "language": "en"}
+{"id": "en_10", "audio": "audio/en_10.wav", "reference": "I left my charger at the office can you bring it home", "language": "en"}
+{"id": "tl_01", "audio": "audio/tl_01.wav", "reference": "Kumusta na ang bagong trabaho mo sa Makati", "language": "tl"}
+{"id": "tl_02", "audio": "audio/tl_02.wav", "reference": "Puntahan mo ang lola mo bukas ng hapon", "language": "tl"}
+{"id": "tl_03", "audio": "audio/tl_03.wav", "reference": "Masarap ang adobo na niluto ng nanay kagabi", "language": "tl"}
+{"id": "tl_04", "audio": "audio/tl_04.wav", "reference": "Huwag kang makalimot bumili ng bigas sa palengke", "language": "tl"}
+{"id": "tl_05", "audio": "audio/tl_05.wav", "reference": "Ang kapatid ko ay mag-aaral na sa susunod na taon", "language": "tl"}
+{"id": "tl_06", "audio": "audio/tl_06.wav", "reference": "Umuulan dito kaya hindi ako makakalabas ngayon", "language": "tl"}
+{"id": "tl_07", "audio": "audio/tl_07.wav", "reference": "Tawagan mo ang doktora para sa resulta ng checkup", "language": "tl"}
+{"id": "tl_08", "audio": "audio/tl_08.wav", "reference": "Napakainit ngayong araw sa Maynila", "language": "tl"}
+{"id": "tl_09", "audio": "audio/tl_09.wav", "reference": "Salamat sa tulong mo kahapon napakalaki ng naitulong", "language": "tl"}
+{"id": "tl_10", "audio": "audio/tl_10.wav", "reference": "Kailangan natin umalis ng maaga para iwas trapik", "language": "tl"}
+{"id": "taglish_01", "audio": "audio/taglish_01.wav", "reference": "Punta tayo sa meeting tomorrow pagkatapos ng lunch", "language": "taglish"}
+{"id": "taglish_02", "audio": "audio/taglish_02.wav", "reference": "Na-send mo na ba yung file kay Priya", "language": "taglish"}
+{"id": "taglish_03", "audio": "audio/taglish_03.wav", "reference": "I-check mo muna yung email bago tayo umalis", "language": "taglish"}
+{"id": "taglish_04", "audio": "audio/taglish_04.wav", "reference": "Sabi ng boss ko na due na raw ang project next week", "language": "taglish"}
+{"id": "taglish_05", "audio": "audio/taglish_05.wav", "reference": "Maglalaba muna ako tapos manonood nalang ng Netflix", "language": "taglish"}
+{"id": "taglish_06", "audio": "audio/taglish_06.wav", "reference": "Yung kamag-anak natin from Cebu ay dadating sa Saturday", "language": "taglish"}
+{"id": "taglish_07", "audio": "audio/taglish_07.wav", "reference": "Hindi pa tapos yung code may bug pa sa login page", "language": "taglish"}
+{"id": "taglish_08", "audio": "audio/taglish_08.wav", "reference": "Bilhan mo nga ako ng coffee sa pantry pagdaan mo", "language": "taglish"}
+{"id": "taglish_09", "audio": "audio/taglish_09.wav", "reference": "Naka-book na yung hotel pero hindi pa yung flights", "language": "taglish"}
+{"id": "taglish_10", "audio": "audio/taglish_10.wav", "reference": "Tawagan mo yung driver pagkatapos ng call with the client", "language": "taglish"}

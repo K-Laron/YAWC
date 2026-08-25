@@ -22,7 +22,7 @@ def _niri_window() -> dict:
     try:
         out = subprocess.run(["niri", "msg", "-j", "focused-window"],
                              capture_output=True, text=True, timeout=0.05)
-        return json.loads(out.stdout)
+        return json.loads(out.stdout) or {}  # niri returns literal null when nothing focused
     except Exception:
         return {}
 
