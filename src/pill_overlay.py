@@ -27,6 +27,7 @@ pill {
 .transcribing { background: rgba(30,41,59,0.95); }
 .polished { background: rgba(5,150,105,0.95); }
 wave { background: white; border-radius: 2px; min-width: 3px; }
+timer { font-family: monospace; font-size: 10pt; opacity: 0.9; }
 """
 
 class PillWindow(Gtk.Window):
@@ -42,7 +43,7 @@ class PillWindow(Gtk.Window):
         Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         self.set_decorated(False)
         self.set_resizable(False)
-        # pill content — Wispr-like: mic icon + waveform + text + timer
+        # pill content — Wispr-like: mic + waveform + text + timer (UX)
         self.icon = Gtk.Label(label="🎤")
         self.wave1 = Gtk.Box(); self.wave1.add_css_class("wave"); self.wave1.set_size_request(3, 8)
         self.wave2 = Gtk.Box(); self.wave2.add_css_class("wave"); self.wave2.set_size_request(3, 14)
@@ -52,17 +53,20 @@ class PillWindow(Gtk.Window):
         self.wave_box.set_visible(False)
         self.label = Gtk.Label(label="Listening…")
         self.label.add_css_class("pill")
+        self.timer = Gtk.Label(label="00:00")
+        self.timer.add_css_class("timer")
         self.spinner = Gtk.Spinner()
         self.spinner.set_visible(False)
         css = Gtk.CssProvider()
         css.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(self.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        # pill container
+        # pill container — UX: icon + wave + text + timer + spinner
         pill_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         pill_box.set_halign(Gtk.Align.CENTER)
         pill_box.append(self.icon)
         pill_box.append(self.wave_box)
         pill_box.append(self.label)
+        pill_box.append(self.timer)
         pill_box.append(self.spinner)
         self.label_box = pill_box
         self.label_box.add_css_class("pill")
@@ -72,11 +76,12 @@ class PillWindow(Gtk.Window):
         self.set_child(outer)
         self.present()
         self.tick = 0
+        self.start_time = 0
         GLib.timeout_add(100, self.poll)
         GLib.timeout_add(150, self.animate_wave)
+        GLib.timeout_add(200, self.update_timer)
 
     def animate_wave(self):
-        # Wispr-like waveform animation when recording
         if self.wave_box.get_visible():
             import random
             self.wave1.set_size_request(3, random.randint(6, 14))
@@ -85,22 +90,36 @@ class PillWindow(Gtk.Window):
             self.tick += 1
         return True
 
+    def update_timer(self):
+        # UX: timer counts during recording like Wispr
+        if self.wave_box.get_visible() and self.start_time:
+            import time
+            elapsed = int(time.time() - self.start_time)
+            self.timer.set_label(f"{elapsed//60:02d}:{elapsed%60:02d}")
+            self.timer.set_visible(True)
+        else:
+            self.timer.set_visible(False)
+        return True
+
     def poll(self):
         if STATE.exists():
             try:
                 data=json.loads(STATE.read_text())
                 state=data.get('state','idle')
                 text=data.get('text','')[:50]
-                # Wispr-like text
                 if state=="recording":
-                    self.label.set_label(f"Listening… {text}" if text and text!="02:00" else "Listening…")
+                    if not self.start_time:
+                        import time; self.start_time = time.time()
+                    self.label.set_label("Listening…  release Right Alt to paste")
                     self.label_box.remove_css_class("transcribing"); self.label_box.remove_css_class("polished"); self.label_box.add_css_class("recording")
                     self.wave_box.set_visible(True); self.spinner.set_visible(False); self.spinner.stop()
                 elif state=="transcribing":
+                    self.start_time = 0
                     self.label.set_label("Transcribing…")
                     self.label_box.remove_css_class("recording"); self.label_box.remove_css_class("polished"); self.label_box.add_css_class("transcribing")
                     self.wave_box.set_visible(False); self.spinner.set_visible(True); self.spinner.start()
                 elif state=="polished":
+                    self.start_time = 0
                     self.label.set_label(text if text else "✓ Done")
                     self.label_box.remove_css_class("recording"); self.label_box.remove_css_class("transcribing"); self.label_box.add_css_class("polished")
                     self.wave_box.set_visible(False); self.spinner.set_visible(False); self.spinner.stop()
@@ -110,6 +129,8 @@ class PillWindow(Gtk.Window):
                 self.set_visible(True)
             except: pass
         else:
+            self.start_time = 0
+            self.timer.set_visible(False)
             self.set_visible(False)
         return True
 
