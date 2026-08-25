@@ -13,21 +13,19 @@ from gi.repository import Gtk, Gtk4LayerShell, GLib
 STATE = pathlib.Path("/tmp/yawc-pill.state")
 CSS = b"""
 window { background: transparent; }
-pill {
-  background: rgba(15,23,42,0.92);
-  color: white;
+/* class selectors: bare 'pill'/'wave' would match node names, not these classes */
+.pill {
+  background: rgba(12,12,14,0.88);
+  color: #e8e8ea;
   border-radius: 9999px;
-  padding: 12px 24px;
-  font-size: 13pt;
-  font-weight: 600;
-  border: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+  padding: 9px 16px;
+  font-size: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
 }
-.recording { background: rgba(220,38,38,0.95); }
-.transcribing { background: rgba(30,41,59,0.95); }
-.polished { background: rgba(5,150,105,0.95); }
-wave { background: white; border-radius: 2px; min-width: 3px; }
-timer { font-family: monospace; font-size: 10pt; opacity: 0.9; }
+.wave { background: white; border-radius: 2px; min-width: 3px; }
+.timer { font-family: monospace; font-size: 10px; color: #77777f; }
+.dim { color: #9a9aa2; font-size: 11px; }
 """
 
 class PillWindow(Gtk.Window):
@@ -43,16 +41,17 @@ class PillWindow(Gtk.Window):
         Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         self.set_decorated(False)
         self.set_resizable(False)
-        # pill content — Wispr-like: mic + waveform + text + timer (UX)
-        self.icon = Gtk.Label(label="🎤")
-        self.wave1 = Gtk.Box(); self.wave1.add_css_class("wave"); self.wave1.set_size_request(3, 8)
-        self.wave2 = Gtk.Box(); self.wave2.add_css_class("wave"); self.wave2.set_size_request(3, 14)
-        self.wave3 = Gtk.Box(); self.wave3.add_css_class("wave"); self.wave3.set_size_request(3, 10)
+        # pill content — small Wispr-like wave + dim label + timer (no mic)
+        self.wave_bars = []
         self.wave_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
-        self.wave_box.append(self.wave1); self.wave_box.append(self.wave2); self.wave_box.append(self.wave3)
+        for _ in range(6):
+            bar = Gtk.Box(); bar.add_css_class("wave"); bar.set_size_request(3, 8)
+            self.wave_bars.append(bar)
+            self.wave_box.append(bar)
         self.wave_box.set_visible(False)
-        self.label = Gtk.Label(label="Listening…")
+        self.label = Gtk.Label(label="Listening")
         self.label.add_css_class("pill")
+        self.label.add_css_class("dim")
         self.timer = Gtk.Label(label="00:00")
         self.timer.add_css_class("timer")
         self.spinner = Gtk.Spinner()
@@ -60,10 +59,9 @@ class PillWindow(Gtk.Window):
         css = Gtk.CssProvider()
         css.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(self.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        # pill container — UX: icon + wave + text + timer + spinner
+        # pill container — UX: wave + text + timer + spinner (no mic)
         pill_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         pill_box.set_halign(Gtk.Align.CENTER)
-        pill_box.append(self.icon)
         pill_box.append(self.wave_box)
         pill_box.append(self.label)
         pill_box.append(self.timer)
@@ -82,12 +80,13 @@ class PillWindow(Gtk.Window):
         GLib.timeout_add(200, self.update_timer)
 
     def animate_wave(self):
+        # ponytail: synthetic sine wave — real mic amplitude if fake reads wrong
         if self.wave_box.get_visible():
-            import random
-            self.wave1.set_size_request(3, random.randint(6, 14))
-            self.wave2.set_size_request(3, random.randint(10, 18))
-            self.wave3.set_size_request(3, random.randint(6, 12))
+            import math
             self.tick += 1
+            for i, bar in enumerate(self.wave_bars):
+                h = 10 + 7 * math.sin(self.tick / 2.0 + i * 0.9)
+                bar.set_size_request(3, max(4, int(h)))
         return True
 
     def update_timer(self):
@@ -95,7 +94,7 @@ class PillWindow(Gtk.Window):
         if self.wave_box.get_visible() and self.start_time:
             import time
             elapsed = int(time.time() - self.start_time)
-            self.timer.set_label(f"{elapsed//60:02d}:{elapsed%60:02d}")
+            self.timer.set_label(f"{elapsed//60}:{elapsed%60:02d}")
             self.timer.set_visible(True)
         else:
             self.timer.set_visible(False)
@@ -110,18 +109,16 @@ class PillWindow(Gtk.Window):
                 if state=="recording":
                     if not self.start_time:
                         import time; self.start_time = time.time()
-                    self.label.set_label("Listening…  release Right Alt to paste")
-                    self.label_box.remove_css_class("transcribing"); self.label_box.remove_css_class("polished"); self.label_box.add_css_class("recording")
+                    self.label.set_label("Listening")
                     self.wave_box.set_visible(True); self.spinner.set_visible(False); self.spinner.stop()
                 elif state=="transcribing":
                     self.start_time = 0
-                    self.label.set_label("Transcribing…")
-                    self.label_box.remove_css_class("recording"); self.label_box.remove_css_class("polished"); self.label_box.add_css_class("transcribing")
+                    self.label.set_label("Transcribing")
                     self.wave_box.set_visible(False); self.spinner.set_visible(True); self.spinner.start()
                 elif state=="polished":
                     self.start_time = 0
-                    self.label.set_label(text if text else "✓ Done")
-                    self.label_box.remove_css_class("recording"); self.label_box.remove_css_class("transcribing"); self.label_box.add_css_class("polished")
+                    # UI only — hide transcript text, just show Done
+                    self.label.set_label("✓ Done")
                     self.wave_box.set_visible(False); self.spinner.set_visible(False); self.spinner.stop()
                 else:
                     self.label.set_label(text)

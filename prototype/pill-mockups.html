@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>YAWC pill options</title>
+<style>
+  body { background:#1a1a1e url('') ; background-image: radial-gradient(circle at 30% 20%, #26262c 0%, #141417 60%);
+         font-family: system-ui, sans-serif; color:#888; padding:48px; }
+  h2 { font-size:13px; font-weight:600; margin:40px 0 12px; color:#aaa; letter-spacing:.5px; }
+  .row { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .stage { background:#0e0e11; border-radius:12px; padding:36px 28px; display:flex; justify-content:center; min-width:280px; }
+  .tag { font-size:11px; color:#666; margin-top:8px; text-align:center; }
+
+  .pill { display:flex; align-items:center; gap:10px; border-radius:9999px;
+          background:rgba(12,12,14,.88); box-shadow:0 4px 16px rgba(0,0,0,.5);
+          padding:10px 18px; color:#e8e8ea; }
+
+  .bars { display:flex; align-items:center; gap:3px; height:20px; }
+  .bars i { width:3px; border-radius:2px; background:#fff; display:block; }
+
+  /* smooth wave heights (static snapshot of animation) */
+  .waveA i:nth-child(1){height:8px}.waveA i:nth-child(2){height:14px}.waveA i:nth-child(3){height:20px}
+  .waveA i:nth-child(4){height:12px}.waveA i:nth-child(5){height:17px}.waveA i:nth-child(6){height:9px}
+  .voice .bars i { background:#4c8dff; }
+
+  .txt { font-size:12.5px; }
+  .dim { color:#9a9aa2; font-size:11px; }
+  .timer { font-size:10.5px; color:#77777f; font-variant-numeric:tabular-nums; }
+  .spin { width:12px; height:12px; border:2px solid #3a3a40; border-top-color:#e8e8ea; border-radius:50%; }
+  .check { color:#4cc38a; font-size:13px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#4c8dff; }
+</style></head>
+<body>
+
+<h2>OPTION A — Wispr-faithful (recommended)</h2>
+<div class="row">
+  <div><div class="stage"><div class="pill"><div class="bars waveA"><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div>
+    <div class="tag">recording, silence — white bars only, no text</div></div>
+  <div><div class="stage"><div class="pill voice"><div class="bars waveA"><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="timer">0:07</span></div></div>
+    <div class="tag">recording, voice — bars turn blue, subtle timer</div></div>
+  <div><div class="stage"><div class="pill"><span class="spin"></span><span class="txt dim">Transcribing</span></div></div>
+    <div class="tag">transcribing — spinner, lowercase, dim</div></div>
+</div>
+
+<h2>OPTION B — bars + label (current layout, tamed)</h2>
+<div class="row">
+  <div><div class="stage"><div class="pill"><div class="bars waveA"><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="txt">Listening</span><span class="timer">0:07</span></div></div>
+    <div class="tag">recording — regular weight, smaller, dimmer</div></div>
+  <div><div class="stage"><div class="pill"><span class="check">✓</span><span class="txt dim">Done</span></div></div>
+    <div class="tag">polished</div></div>
+</div>
+
+<h2>OPTION C — ultra minimal</h2>
+<div class="row">
+  <div><div class="stage"><div class="pill" style="padding:10px 14px"><div class="bars waveA"><i></i><i></i><i></i><i></i><i></i></div></div></div>
+    <div class="tag">recording — bars only, ever. no text in any state</div></div>
+  <div><div class="stage"><div class="pill" style="padding:12px 14px"><span class="dot"></span></div></div>
+    <div class="tag">transcribing — dot pulses</div></div>
+</div>
+
+</body></html>
