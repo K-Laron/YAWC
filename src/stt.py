@@ -22,10 +22,27 @@ def available() -> bool:
         return False
 
 
+def _preload_cuda():
+    # pip nvidia wheels: ctranslate2 needs libcublas/libcudnn — load them RTLD_GLOBAL
+    # before faster_whisper touches CUDA (works for systemd-spawned processes too)
+    import ctypes, glob
+    dirs = glob.glob(os.path.expanduser("~/.local/lib/python3.*/site-packages/nvidia/*/lib"))
+    dirs += glob.glob("/usr/lib/python3*/site-packages/nvidia/*/lib")
+    pats = ["libcublasLt.so*", "libcublas.so*", "libcudnn*.so*"]
+    for pat in pats:
+        for d in dirs:
+            for so in sorted(glob.glob(f"{d}/{pat}")):
+                try:
+                    ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
 def _load():
     global _model
     if _model is not None:
         return _model
+    _preload_cuda()
     from faster_whisper import WhisperModel
     # local dir per 09 layout, else HF-cache name — both local_files_only
     path = str(MODEL_DIR) if MODEL_DIR.exists() else MODEL_NAME

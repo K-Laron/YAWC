@@ -30,9 +30,10 @@ check("snippet expand", "DISCLAIMER_TEXT" in expand_snippets("please add disclai
 check("snippet no-op", expand_snippets("nothing here") == "nothing here")
 polish.REPO_CONFIG = old
 
-# transforms — regex mimic fallback (no llama-server in CI)
-check("structure transform", "- First" in transform_text("first we eat second we go", mode="structure"))
-check("concise shortens", len(transform_text(" ".join(["word"] * 30), mode="concise")) < 200)
+# transforms — regex mimic fallback (test the deterministic path; live LLM wording varies)
+from src.polish import _regex_transform
+check("structure transform", "- First" in _regex_transform("first we eat second we go", mode="structure"))
+check("concise shortens", len(_regex_transform(" ".join(["word"] * 30), mode="concise")) < 200)
 
 # context — category buckets per 04, file tag from title
 from src.context import categorize, get_context
