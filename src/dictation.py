@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# ponytail: Dictation deep module — dictate(Utterance) -> str, owns STT+Context+Polish,
-# paste stays outside. Pill states via src/pill. Backtrack/snippets live in polish.
+# ponytail: Dictation deep module — dictate(Utterance) -> str, owns STT+Context+Polish.
+# Pure compute: no UI writes (pill belongs to Recorder), paste stays outside.
 import dataclasses
 
 @dataclasses.dataclass
@@ -20,12 +20,9 @@ class Dictation:
         # <1s target per map: audio stop -> text ready. Phase timings -> latency.log
         import time
         t0 = time.perf_counter()
-        import src.pill as pill
-        pill.transcribing()
         raw = self._transcribe(u.wav_path)
         stt_ms = (time.perf_counter() - t0) * 1000
         if not raw:
-            pill.idle()
             return ""
         t1 = time.perf_counter()
         raw = self._snippets(raw)
@@ -33,7 +30,6 @@ class Dictation:
         ctx_ms = (time.perf_counter() - t1) * 1000
         if not polish:  # eval --no-polish: score raw STT
             self._log_latency(stt_ms, ctx_ms, 0.0, (time.perf_counter() - t0) * 1000)
-            pill.polished(raw)
             return raw
         t2 = time.perf_counter()
         res = (self._transform(raw, u.transform_mode)
@@ -41,7 +37,6 @@ class Dictation:
         pol_ms = (time.perf_counter() - t2) * 1000
         total_ms = (time.perf_counter() - t0) * 1000
         self._log_latency(stt_ms, ctx_ms, pol_ms, total_ms)
-        pill.polished(res)
         return res
 
     def _log_latency(self, stt_ms: float, ctx_ms: float, pol_ms: float, total_ms: float):
@@ -72,33 +67,11 @@ class Dictation:
         from src import context
         if u.cursor_left or u.app_id or u.title:
             cat = context.categorize(u.app_id, u.title)
-            cursor, ctx = u.cursor_left, None
+            cursor = u.cursor_left
         else:
-            ctx = context.get_context(timeout_ms=80)
+            ctx = context.get_context(timeout_ms=80)  # audits itself per 04
             cat, cursor = ctx["cat"], ctx["cursor_left"]
-            self._audit(ctx)
         return context.CursorContext(cursor_left=cursor, cat=cat)
-
-    def _audit(self, ctx: dict) -> None:
-        # 04: on-device audit log of context reads, 14-day prune — never the text itself
-        import json, time, pathlib
-        log = pathlib.Path.home() / ".local/share/yawc/context.log"
-        try:
-            log.parent.mkdir(parents=True, exist_ok=True)
-            now = time.time()
-            lines = []
-            if log.exists():
-                for ln in log.read_text().splitlines():
-                    try:
-                        if now - json.loads(ln)["ts"] < 14 * 86400:
-                            lines.append(ln)
-                    except Exception:
-                        pass
-            lines.append(json.dumps({"ts": int(now), "app": ctx.get("app_id"),
-                                     "cat": ctx.get("cat"), "cursor_len": len(ctx.get("cursor_left", ""))}))
-            log.write_text("\n".join(lines) + "\n")
-        except Exception:
-            pass
 
     def _polish(self, raw: str, ctx) -> str:
         from src import polish
@@ -121,10 +94,14 @@ class FakeDictation(Dictation):
 
 
 def dictate_and_paste(wav_path: str) -> str:
-    # release callback for Recorder — dictate then inject into the focused field
-    from src import polish, injection
+    # release callback for Recorder — composition root: ONE context walk feeds
+    # polish facts and the paste guard; Recorder owns all pill rendering
+    from src import polish, injection, context
     d = Dictation(hotwords=polish.load_hotwords())
-    out = d.dictate(Utterance(wav_path=wav_path))
-    if out:
-        injection.inject(out, restore=True)
+    ctx = context.get_context(timeout_ms=80)
+    u = Utterance(wav_path=wav_path, cursor_left=ctx.get("cursor_left", ""),
+                  app_id=ctx.get("app_id", ""), title=ctx.get("title", ""))
+    out = d.dictate(u)
+    injection.inject(out, restore=True,
+                     is_password=None if ctx.get("skip") else bool(ctx.get("is_password")))
     return out

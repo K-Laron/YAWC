@@ -48,7 +48,7 @@ Not vibes. Gates:
 | Do-not-translate | 100% | ≥90% |
 | Boundary (kamag-anak) | 1/1 | ≥75% |
 
-Latency, warm: **~0.94s** hold-release-to-text for short dictations (Wispr target: <1s on local hardware).
+Latency, warm: **~0.85–0.95s** hold-release-to-text for short dictations (Wispr target: <1s on local hardware). Release-path dead waits removed 2026-08-26 (recorder stop 210→114ms, injection settle now a poll); `beam_size` A/B tested and rejected — greedy was *slower* (941 vs 906ms mean over eval set). Every phase logged to `~/.local/share/yawc/latency.log`.
 
 ## Getting Started
 
@@ -81,7 +81,7 @@ Full instructions including llama.cpp CUDA build: [`INSTALL.md`](INSTALL.md).
 
 ## Under the hood
 
-faster-whisper large-v3-turbo (`int8_float16` CUDA) → Silero VAD → regex fast path (<5ms) or llama.cpp Qwen3-1.7B c2048 for backtrack and long-form → clipboard paste with restore via `wtype`. Both models resident on the same 4GB card as your wallpaper engine ([measured](eval/vram-baseline.json)). LLM server preloads at boot and answers health checks; if VRAM pressure ever kills it, polish degrades to regex instead of crashing. Every utterance logs phase timings to `~/.local/share/yawc/latency.log`.
+faster-whisper large-v3-turbo (`int8_float16` CUDA) → Silero VAD → regex fast path (<5ms) or llama.cpp Qwen3-1.7B c2048 for backtrack and long-form → clipboard paste with restore via `wtype`. Both models resident on the same 4GB card as your wallpaper engine ([measured](eval/vram-baseline.json)). LLM server preloads at boot and answers health checks; if VRAM pressure ever kills it, polish degrades to regex instead of crashing. The evdev daemon supervises its device streams — USB receivers can unplug, re-enumerate, and replug without losing dictation (5s rescan, `Restart=always` backstop). Every utterance logs phase timings to `~/.local/share/yawc/latency.log`.
 
 ## Where to look
 

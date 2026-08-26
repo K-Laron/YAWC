@@ -13,12 +13,11 @@ def _selection() -> str:
 
 
 def command_release(wav_path: str) -> str:
-    import src.pill as pill
+    # pill states belong to Recorder — this returns result strings only
     from src import stt, polish, injection
     sel = _selection()
     if not sel:
         return "no selection"
-    pill.transcribing()
     try:
         instruction = stt.transcribe(wav_path).strip().lower()
     except Exception:

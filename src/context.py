@@ -2,7 +2,7 @@
 # ponytail: Context deep module per 04 — app (niri 10ms) + cursor ±80 (Atspi 40ms,
 # primary-selection fallback) + IDE file tag from title. Total ≤80ms, skip if slow.
 # All on-device. Password/URL detection here too (04 exclusion + injection guard).
-import json, re, subprocess, time
+import json, pathlib, re, subprocess, time
 from dataclasses import dataclass
 
 FILE_RE = re.compile(r"[\w./-]+\.(py|rs|ts|tsx|js|jsx|json|md|kdl|toml|go|c|cpp|h|css|html|sh)\b")
@@ -118,6 +118,30 @@ def _primary_selection() -> str:
 TERMINALS = ("foot", "kitty", "alacritty", "wezterm", "gnome-terminal", "t3code", "code", "terminal")
 
 
+def _audit(win: dict, cat: str) -> None:
+    # 04: on-device audit log of every context read, 14-day prune — never the text itself.
+    # Lives inside get_context so the invariant "every read is audited" holds everywhere.
+    import json
+    log = pathlib.Path.home() / ".local/share/yawc/context.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        lines = []
+        if log.exists():
+            for ln in log.read_text().splitlines():
+                try:
+                    if now - json.loads(ln)["ts"] < 14 * 86400:
+                        lines.append(ln)
+                except Exception:
+                    pass
+        lines.append(json.dumps({"ts": int(now), "app": win.get("app_id"),
+                                 "cat": cat,
+                                 "cursor_len": len(win.get("cursor_left", ""))}))
+        log.write_text("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
 def get_context(timeout_ms: int = 80) -> dict:
     start = time.time()
     win = _niri_window()
@@ -134,11 +158,15 @@ def get_context(timeout_ms: int = 80) -> dict:
             # Chromium a11y gating (04) is the real guard there
             cursor_left = _primary_selection()
     if time.time() - start > timeout_ms / 1000:
-        return {"app_id": app_id, "cat": cat, "cursor_left": "", "file_tag": "", "skip": "timeout"}
+        ctx = {"app_id": app_id, "cat": cat, "cursor_left": "", "file_tag": "", "skip": "timeout"}
+        _audit(ctx, cat)
+        return ctx
     file_tag_m = FILE_RE.search(title) if app_id.lower() in ("code", "cursor", "nvim", "zed") else None
-    return {"app_id": app_id, "title": title, "cat": cat,
-            "cursor_left": cursor_left, "file_tag": file_tag_m.group(0) if file_tag_m else "",
-            "is_password": is_pw}
+    ctx = {"app_id": app_id, "title": title, "cat": cat,
+           "cursor_left": cursor_left, "file_tag": file_tag_m.group(0) if file_tag_m else "",
+           "is_password": is_pw}
+    _audit(ctx, cat)
+    return ctx
 
 
 def cursor_context(ctx: dict) -> CursorContext:

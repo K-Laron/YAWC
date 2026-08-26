@@ -63,7 +63,7 @@ check("fake dictate", FakeDictation().dictate(Utterance(wav_path="x")) == "hello
 d = Dictation(hotwords="Priya")
 t0 = time.time()
 out = d.dictate(Utterance(wav_path="/tmp/definitely-missing.wav"))
-check("real degrade empty", out == "" and time.time() - t0 < 5)
+check("real degrade empty", out == "" and time.time() - t0 < 15)  # CUDA OOM vs daemon costs ~4s; bound catches hangs only
 
 # cursor context — owned by context.py, string built once (C2)
 from src.context import CursorContext
@@ -74,5 +74,71 @@ from src.pill import ui_for
 check("ui recording", ui_for({"state": "recording"})["wave"] is True)
 check("ui idle hides", ui_for({"state": "idle"})["visible"] is False)
 check("ui missing hides", ui_for(None)["visible"] is False)
+
+# recorder — release path flushes wav and stays fast (regression: no blind sleep/pkill)
+import shutil
+if shutil.which("arecord"):
+    from src.recorder import Recorder
+    calls, stamps = [], []
+    def _on_rel(p):
+        stamps.append(time.time())
+        calls.append(1)
+        return "ok"
+    rec = Recorder("selftest", on_release=_on_rel)
+    rec.begin()
+    assert rec.proc is not None
+    first = rec.proc
+    rec.begin()  # second node emitting hold must not spawn a second arecord
+    same = rec.proc is first and first.poll() is None
+    time.sleep(0.25)  # let arecord deliver >44B so on_release actually runs
+    t0 = time.time(); res = rec.release(); dt_total = time.time() - t0
+    capture_dt = (stamps[0] - t0) if stamps else 99.0  # capture phase only (tail sleeps 2s)
+    res2 = rec.release()  # sibling node release: silent no-op, never re-runs pipeline
+    check("recorder release fused + no duplicate dictation",
+          capture_dt < 0.18 and dt_total < 2.6 and rec.proc is None and same
+          and res2 is None
+          and len(calls) == (0 if res is None else 1))
+else:
+    check("recorder skip headless", True)
+
+# injection — clipboard poll converges on fresh text, restores user clipboard
+from src.injection import _clipboard_settled
+if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+    orig = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout
+    # DEVNULL: wl-copy daemonizes — its child must not hold the test's stdout pipes
+    def _copy(s):
+        subprocess.run(["wl-copy"], input=s, text=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _copy("yawc-selftest-clip")
+    t0 = time.time(); hit = _clipboard_settled("yawc-selftest-clip"); dt = time.time() - t0
+    if orig:
+        _copy(orig)
+    check("clipboard poll converges fast", hit and dt < 0.1)
+else:
+    check("clipboard poll skip headless", True)
+
+# injection — password guard: explicit fact never walks, None falls back, True refuses
+from src import injection
+if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wtype"):
+    sent, walks = [], [0]
+    real_gc = getattr(__import__("src.context", fromlist=["get_context"]), "get_context")
+    def counting_gc(*a, **k):
+        walks[0] += 1
+        return real_gc(*a, **k)
+    import src.context as _ctxmod
+    orig_wp, orig_gc = injection._wtype_paste, _ctxmod.get_context
+    injection._wtype_paste = lambda t, r: sent.append(t) or True
+    _ctxmod.get_context = counting_gc
+    try:
+        refused = injection.inject("nope", is_password=True) is False and sent == [] and walks[0] == 0
+        allowed = injection.inject("yes", is_password=False) is True and sent == ["yes"] and walks[0] == 0
+        fallback_walks = walks[0]
+        injection.inject("fb", is_password=None)  # unknown → must walk once itself
+        check("password guard uses caller facts", refused and allowed and fallback_walks == 0 and walks[0] == 1)
+    finally:
+        injection._wtype_paste = orig_wp
+        _ctxmod.get_context = orig_gc
+else:
+    check("password guard skip headless", True)
 
 print(f"\n{ok} checks passed")

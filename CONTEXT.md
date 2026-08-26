@@ -17,6 +17,7 @@ Domain language for the local Wispr clone. Glossary only — no implementation.
 | **Transform** | Highlight text → hotkey → LLM rewrite with a prompt (concise/reword/structure + custom samples) |
 | **Snippet** | Voice cue that expands to full formatted text (e.g., "add disclaimer") |
 | **Hotword** | Term boosted in STT via `initial_prompt`/`hotwords` so `Priya`, `kamag-anak` favor correct spelling without retraining |
+| **Pill** | Bottom-center overlay (GTK4 layer-shell) showing hold state — recording wave, processing spinner, done flash. Written only by the hold lifecycle (Recorder); the overlay is a dumb poller |
 | **Frontier** | Open, unblocked, unclaimed wayfinder tickets — the edge of what can be decided now |
 
 ## Boundaries
