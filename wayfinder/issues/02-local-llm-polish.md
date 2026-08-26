@@ -26,3 +26,20 @@ Independent of STT except for VRAM sharing (both will be re-resolved in 08). Res
 
 - Wispr budget: E2E ASR <200 ms, LLM <200 ms, net <200 ms = 700 ms total (`wisprflow.ai/post/technical-challenges`)
 - Wispr Smart Formatting locale tiers: dedicated EN/FR/etc, general for TL (`docs.wisprflow.ai 4048537120`)
+
+## Implementation revision — 2026-08-26
+
+As specced (c512, 600ms), the LLM polish path never executed: SYSTEM_PROMPT alone
+exceeds 512 tokens, so every request returned HTTP 400 and the graceful fallback
+silently substituted regex forever. Revisions, all measured:
+
+- ctx **512 → 2048** (prompt + headroom; KV cost fits both-resident layout)
+- `/no_think` appended to every `_chat` user turn — Qwen3 thinking otherwise eats
+  `max_tokens` and returns empty content
+- polish timeout **600ms → 1500ms**: first uncached prefill measured 713ms on this card
+- server lifecycle: aliveness = port health (`llm_alive()`), teardown = pidfile;
+  spawned once by yawc-evdev at daemon startup (`preload_llm`), never per hold
+
+Evidence: warm backtrack rewrite verified live ("punta tayo sa meeting tomorrow
+actually sa Friday na lang pala" → "Punta tayo sa meeting sa Friday na lang pala."),
+~200ms cached / ~700ms uncached. Commit ae65f3a.

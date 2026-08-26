@@ -37,7 +37,7 @@ yawc-daemon command                                  # Ctrl+Win+Alt command mode
 
 ```bash
 ./packaging/offline-proof.sh                          # no egress outside loopback
-HF_HUB_OFFLINE=1 python -m eval.harness --harness eval/harness.jsonl   # gates after models
+HF_HUB_OFFLINE=1 python -m eval.harness --harness eval/harness.jsonl   # 5 gates: EN WER, TL CER, Taglish CER, DNT >=0.90, boundary >=0.75
 ```
 
 ## Config

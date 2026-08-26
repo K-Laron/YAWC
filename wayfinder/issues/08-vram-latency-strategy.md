@@ -27,3 +27,17 @@ Needs engine/model choices from 01/02 and gate from 07 to know what "good enough
 `python bench.py` output + `nvidia-smi --query-gpu=memory.used --format=csv` snapshot committed as asset; decision written to map.
 
 # ponytail: global preload, per-app warm if throughput matters
+
+## Implementation revision — 2026-08-26
+
+Sequential swap replaced by **both models resident**: whisper 1128 MiB +
+llama-server c2048 1293 MiB + desktop 934 MiB ≈ 3355/4096 MiB (~741 MiB headroom).
+Measured snapshot committed: [eval/vram-baseline.json](../../eval/vram-baseline.json).
+
+- The 900MB VRAM gate now guards **cold spawns only** — an already-running server
+  costs no new VRAM (the old check saw llama's own allocation and forced regex forever).
+- Latency instrumentation lives in `dictate()` → `~/.local/share/yawc/latency.log`:
+  simple utterances ~0.94s E2E warm (regex fast path), backtrack utterances add
+  ~200ms warm LLM. Meets the <1s target for short dictations.
+- Degradation contract unchanged: if VRAM pressure kills llama-server, polish falls
+  back to regex (<5ms), never crashes.
