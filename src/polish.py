@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ponytail: Polish deep module per 02/05/06/08 — regex pass <5ms, llama-server LLM
-# warm on demand with 600ms deadline, regex fallback always holds <1s E2E.
-# Sequential VRAM per 08: release_llm() before recording frees VRAM for STT.
+# warm on demand, regex fallback always holds. The running server is the state:
+# aliveness = port health, teardown = pidfile. Both models resident per 08 revision.
 import json, os, pathlib, re, shutil, subprocess, time, urllib.request
 
 CONFIG_DIR = pathlib.Path.home() / ".config/yawc"
@@ -9,7 +9,6 @@ REPO_CONFIG = pathlib.Path(__file__).parent.parent / "config"
 LLM_BIN = shutil.which("llama-server") or str(pathlib.Path.home() / ".local/share/yawc/bin/llama-server")
 LLM_MODEL = pathlib.Path(os.environ.get("YAWC_LLM_MODEL", pathlib.Path.home() / ".local/share/yawc/models/Qwen3-1.7B-Q4_K_M.gguf"))
 LLM_PORT = 8934
-_llm_proc = None
 
 # 02 system prompt — verbatim from research/02-local-llm-polish.md (single prompt, no branching)
 SYSTEM_PROMPT = """You are YAWC Polish — a deterministic text polisher for hold→release dictation. You run 100% offline on device. You MUST follow every rule. No exceptions.
@@ -117,52 +116,59 @@ def _strip_think(s: str) -> str:
     return re.sub(r"<think>.*?</think>", "", s, flags=re.S).strip()
 
 
-def _ensure_server(timeout_s: float = 0.3) -> bool:
-    """Start llama-server warm (08: LLM on demand, Qwen3-1.7B 1.2GB c512).
-    Short budget: cold load must not eat the 600ms deadline — first utterance
-    falls back to regex while the server finishes loading in background."""
-    global _llm_proc
-    if _llm_proc and _llm_proc.poll() is None:
+LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
+_LLM_ARGV = [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
+             "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"]
+
+
+def llm_alive() -> bool:
+    # the running server is the state — port health, not any Python global
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.2)
         return True
-    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
+    except Exception:
         return False
-    _llm_proc = subprocess.Popen(
-        [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
-         "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+
+
+def _spawn_llm():
+    # single spawn site; pidfile makes release work across processes
+    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
+        return None
+    proc = subprocess.Popen(_LLM_ARGV,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    LLM_PIDFILE.write_text(str(proc.pid))
+    return proc
+
+
+def _ensure_server(timeout_s: float = 0.3) -> bool:
+    """True when a server answers :8934. Short budget: cold load must not eat
+    the polish deadline — first utterance falls back to regex while the model
+    finishes loading in background."""
+    if llm_alive():
+        return True
+    proc = _spawn_llm()
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.2)
+        if llm_alive():
             return True
-        except Exception:
-            time.sleep(0.05)
-    return _llm_proc.poll() is None
+        time.sleep(0.05)
+    return proc is not None and proc.poll() is None
 
 
 def release_llm():
-    # 08 sequential VRAM: call before recording so STT gets its 2.0-2.6GB back
-    global _llm_proc
-    if _llm_proc and _llm_proc.poll() is None:
-        _llm_proc.terminate()
-    _llm_proc = None
+    # kill by pidfile so any process can tear down any server (orphans included)
+    try:
+        os.kill(int(LLM_PIDFILE.read_text()), 15)
+    except Exception:
+        pass
+    LLM_PIDFILE.unlink(missing_ok=True)
 
 
 def preload_llm():
-    # both models fit this card (whisper 1.1G + llama ~1.45G + desktop ≈ 3.5/4G) —
-    # spawn at hold-start so weights load while the user speaks; polish then hits
-    # a warm server instead of losing the 300ms-vs-12s load race every utterance.
-    global _llm_proc
-    if _llm_proc and _llm_proc.poll() is None:
-        return
-    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
-        return
-    _llm_proc = subprocess.Popen(
-        [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
-         "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    # both models fit this card (whisper ~1.1G + llama ~1.45G + desktop ≈ 3.5/4G).
+    # Long-lived daemons call this once at startup; one-shot CLIs never do.
+    if not llm_alive():
+        _spawn_llm()
 
 
 def _chat(messages: list, timeout_s: float) -> str:
@@ -195,14 +201,15 @@ def llm_polish(text: str, cursor_context, timeout_ms: int = 600) -> str:
     if not text.strip():
         return ""
     header = cursor_context.prompt_header() if hasattr(cursor_context, "prompt_header") else str(cursor_context)
-    cur = _cursor_of(header)
+    # contract: read cursor_left off the object — never re-parse the rendered header
+    cur = getattr(cursor_context, "cursor_left", "") or ""
     # 02 deterministic fast path: short utterance, no backtrack/list cues -> regex only
     cues = re.search(r"\b(actually|scratch that|i mean|hindi pala|teka|first|second|third|dot|at)\b", text, re.I)
     words = text.split()
     if len(words) <= 25 and not cues:
         return regex_polish(text, cur)
     # VRAM gate guards cold spawns only — an already-running server costs no new VRAM
-    if not (_llm_proc and _llm_proc.poll() is None):
+    if not llm_alive():
         free = _vram_free_mb()
         if free is not None and free < 900:
             return regex_polish(text, cur)
@@ -215,11 +222,6 @@ def llm_polish(text: str, cursor_context, timeout_ms: int = 600) -> str:
         return _strip_think(out) or regex_polish(text, cur)
     except Exception:
         return regex_polish(text, cur)
-
-
-def _cursor_of(ctx: str) -> str:
-    m = re.search(r'left="([^"]*)"', ctx)
-    return m.group(1) if m else ""
 
 
 def transform_text(text: str, mode: str = "concise") -> str:

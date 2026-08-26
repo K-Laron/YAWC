@@ -8,6 +8,7 @@ import evdev
 
 from src.recorder import Recorder
 from src.dictation import dictate_and_paste
+from src import polish
 
 # 100/108 = KEY_RIGHTALT aliases on some keyboards; "Keyboard"/"Rapoo" filters
 # this machine's devices (map: optimized for this machine only)
@@ -43,6 +44,8 @@ async def handle_device(dev: evdev.InputDevice, rec: Recorder):
 
 
 async def main():
+    # preload LLM once — weights load while the daemon idles, polish is warm forever
+    await asyncio.to_thread(polish.preload_llm)
     rec = Recorder("evdev", on_release=dictate_and_paste)
     devs = get_kb_devices()
     if not devs:
