@@ -102,6 +102,7 @@ def regex_polish(text: str, cursor_left: str = "") -> str:
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"\s+([,.!?])", r"\1", t)
     t = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), t)
+    t = re.sub(r"\bi\b", "I", t)  # English standalone i is always capital
     for hw in load_hotwords().split():
         t = re.sub(re.escape(hw), hw, t, flags=re.I)
     if t and t[-1] not in ".!?":
