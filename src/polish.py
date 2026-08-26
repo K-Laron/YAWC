@@ -126,7 +126,7 @@ def _ensure_server(timeout_s: float = 0.3) -> bool:
     if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
         return False
     _llm_proc = subprocess.Popen(
-        [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "512", "-ngl", "99",
+        [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
          "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -148,7 +148,26 @@ def release_llm():
     _llm_proc = None
 
 
+def preload_llm():
+    # both models fit this card (whisper 1.1G + llama ~1.45G + desktop ≈ 3.5/4G) —
+    # spawn at hold-start so weights load while the user speaks; polish then hits
+    # a warm server instead of losing the 300ms-vs-12s load race every utterance.
+    global _llm_proc
+    if _llm_proc and _llm_proc.poll() is None:
+        return
+    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
+        return
+    _llm_proc = subprocess.Popen(
+        [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
+         "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
 def _chat(messages: list, timeout_s: float) -> str:
+    # /no_think: Qwen3 soft switch — thinking would eat max_tokens, content comes back empty
+    messages = messages[:-1] + [{"role": messages[-1]["role"],
+                                 "content": messages[-1]["content"] + "\n/no_think"}]
     req = urllib.request.Request(
         f"http://127.0.0.1:{LLM_PORT}/v1/chat/completions",
         data=json.dumps({"messages": messages, "temperature": 0.0, "top_p": 0.8,
@@ -181,9 +200,11 @@ def llm_polish(text: str, cursor_context, timeout_ms: int = 600) -> str:
     words = text.split()
     if len(words) <= 25 and not cues:
         return regex_polish(text, cur)
-    free = _vram_free_mb()
-    if free is not None and free < 900:
-        return regex_polish(text, cur)
+    # VRAM gate guards cold spawns only — an already-running server costs no new VRAM
+    if not (_llm_proc and _llm_proc.poll() is None):
+        free = _vram_free_mb()
+        if free is not None and free < 900:
+            return regex_polish(text, cur)
     if not _ensure_server():
         return regex_polish(text, cur)
     try:
@@ -216,7 +237,7 @@ def transform_text(text: str, mode: str = "concise") -> str:
     try:
         out = _chat([{"role": "system", "content": COMMAND_PROMPT},
                      {"role": "user", "content": f"Instruction: {instruction}\n\nSelected text:\n{text}"}],
-                    timeout_s=0.6)
+                    timeout_s=1.5)
         return _strip_think(out) or _regex_transform(text, mode)
     except Exception:
         return _regex_transform(text, mode)

@@ -17,7 +17,8 @@ class Recorder:
         self.on_release = on_release
 
     def start(self):
-        polish.release_llm()  # 08: sequential VRAM — LLM out before STT in
+        polish.release_llm()  # clear any stale server before STT
+        polish.preload_llm()  # weights load while the user speaks — warm polish at release
         self.mode.touch()
         pill.recording(1)
         subprocess.Popen(["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", str(self.wav)],

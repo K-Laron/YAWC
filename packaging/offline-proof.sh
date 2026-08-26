@@ -2,7 +2,7 @@
 # ponytail: offline proof per 09/CONTEXT — reviewer-runnable, no egress from YAWC procs
 set -euo pipefail
 echo "YAWC processes and their sockets:"
-procs=$(pgrep -f "pill_overlay|yawc|arecord|llama-server" || true)
+procs=$(pgrep -f "pill_overlay|yawc-daemon|evdev_hold|arecord|llama-server|Projects/YAWC|share/yawc" || true)
 [ -z "$procs" ] && echo "  (none running — start yawc-daemon toggle first)" && exit 0
 for p in $procs; do
   conns=$(ss -tunp 2>/dev/null | grep "pid=$p," || true)
