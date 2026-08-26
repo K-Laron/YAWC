@@ -204,7 +204,7 @@ def llm_polish(text: str, cursor_context, timeout_ms: int = 600) -> str:
     # contract: read cursor_left off the object — never re-parse the rendered header
     cur = getattr(cursor_context, "cursor_left", "") or ""
     # 02 deterministic fast path: short utterance, no backtrack/list cues -> regex only
-    cues = re.search(r"\b(actually|scratch that|i mean|hindi pala|teka|first|second|third|dot|at)\b", text, re.I)
+    cues = re.search(r"\b(actually|scratch that|i mean|hindi pala|teka|first|second|third|dot)\b", text, re.I)
     words = text.split()
     if len(words) <= 25 and not cues:
         return regex_polish(text, cur)

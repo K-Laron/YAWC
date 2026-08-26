@@ -115,7 +115,7 @@ def _primary_selection() -> str:
         return ""
 
 
-TERMINALS = ("foot", "kitty", "alacritty", "wezterm", "gnome-terminal")
+TERMINALS = ("foot", "kitty", "alacritty", "wezterm", "gnome-terminal", "t3code", "code", "terminal")
 
 
 def get_context(timeout_ms: int = 80) -> dict:

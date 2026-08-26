@@ -61,7 +61,8 @@ def _run_gates(args, rows):
     results = []
     t0 = time.time()
     for r in rows:
-        hyp = d.dictate(Utterance(wav_path="eval/" + r["audio"]), polish=not args.no_polish)
+        hyp = d.dictate(Utterance(wav_path="eval/" + r["audio"], app_id="eval"),
+                        polish=not args.no_polish)
         results.append((r, hyp))
     if not HAS_JIWER:
         print("jiwer not installed — stub PASS, would score WER/CER")
