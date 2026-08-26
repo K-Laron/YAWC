@@ -1,0 +1,16 @@
+{
+  "captured": "2026-08-26",
+  "gpu": "RTX 3050 Laptop 4GB (4096 MiB)",
+  "claim": "08 revision: whisper STT + llama-server Qwen3-1.7B c2048 resident simultaneously",
+  "measurements": [
+    {"component": "linux-wallpaperengine", "used_mib": 934, "source": "nvidia-smi --query-compute-apps, 2026-08-26"},
+    {"component": "llama-server (c2048, -ngl 99, yawc-evdev startup preload)", "used_mib": 1293, "source": "nvidia-smi --query-compute-apps, 2026-08-26"},
+    {"component": "faster-whisper large-v3-turbo int8_float16 (yawc-evdev resident)", "used_mib": 1128, "source": "nvidia-smi --query-compute-apps pid 913, 2026-08-25"}
+  ],
+  "arithmetic": {
+    "both_resident_mib": 3355,
+    "free_after_both_mib": 741,
+    "note": "741MB < the 900MB cold-spawn gate, which is correct: polish VRAM gate only guards NEW spawns (src/polish.py llm_polish), and the server is already loaded."
+  },
+  "fallback": "if VRAM pressure kills llama-server, polish degrades to regex (<5ms) - never crashes"
+}
