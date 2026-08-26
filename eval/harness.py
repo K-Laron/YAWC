@@ -34,6 +34,26 @@ def main():
     p.add_argument("--no-polish", action="store_true")
     args = p.parse_args()
     rows = load_harness(args.harness)
+    # eval loads its own whisper copy; the resident daemon (llama + maybe whisper)
+    # would OOM us into empty transcripts. Pause it, always restore after.
+    import subprocess
+    def _unit_active():
+        return subprocess.run(["systemctl", "--user", "is-active", "--quiet", "yawc-evdev"]).returncode == 0
+    paused = False
+    if _unit_active():
+        subprocess.run(["systemctl", "--user", "stop", "yawc-evdev"])
+        paused = True
+        time.sleep(2)  # let CUDA memory actually free
+        print("(paused yawc-evdev for VRAM headroom — restoring after)")
+    try:
+        _run_gates(args, rows)
+    finally:
+        if paused:
+            subprocess.run(["systemctl", "--user", "start", "yawc-evdev"])
+            print("(yawc-evdev restored)")
+
+
+def _run_gates(args, rows):
     from src.dictation import Dictation, Utterance
     from src.polish import load_hotwords
     from eval.metrics import normalize_tl, normalize_en

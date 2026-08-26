@@ -15,7 +15,7 @@ Kind of? Wispr Flow without the parts you can't have: no cloud, no account, no m
 - **Real Taglish support** — Wispr's 100 languages don't include mid-clause code-switch. This does, because it was built by someone who says *"nag-send mo na ba kay Priya"* out loud.
 - **Context Awareness, locally** — knows Gmail from Slack from your IDE and adjusts tone. Reads your cursor text too. On-device only.
 - **Command Mode & Transforms** — select text, hold Ctrl+Alt+X, say *"make this shorter"*. Or tap Mod+Shift+T/R/S.
-- **Personal dictionary** — Kenneth, Priya, kamag-anak come out spelled right because they're hotwords, not hopes.
+- **Personal dictionary** — your name, your jargon, kamag-anak come out spelled right because they're hotwords, not hopes.
 - **Snippets** — say *"add disclaimer"*, get the whole paragraph.
 
 This is **NOT** a product. There's no sync, no team plan, no enterprise tier. It's one opinionated tool tuned to exactly one laptop, because that's the whole point.

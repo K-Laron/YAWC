@@ -4,7 +4,7 @@
 {"id": "en_04", "audio": "audio/en_04.wav", "reference": "The deploy failed again so I am rolling it back now", "language": "en"}
 {"id": "en_05", "audio": "audio/en_05.wav", "reference": "Great meeting everyone let's continue tomorrow morning", "language": "en"}
 {"id": "en_06", "audio": "audio/en_06.wav", "reference": "My flight lands at nine so pick me up around half past", "language": "en"}
-{"id": "en_07", "audio": "audio/en_07.wav", "reference": "Kenneth approved the budget for the new laptops", "language": "en"}
+{"id": "en_07", "audio": "audio/en_07.wav", "reference": "Alex approved the budget for the new laptops", "language": "en"}
 {"id": "en_08", "audio": "audio/en_08.wav", "reference": "Do not forget to back up the database before the migration", "language": "en"}
 {"id": "en_09", "audio": "audio/en_09.wav", "reference": "The client wants three revisions by Friday afternoon", "language": "en"}
 {"id": "en_10", "audio": "audio/en_10.wav", "reference": "I left my charger at the office can you bring it home", "language": "en"}

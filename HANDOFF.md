@@ -6,7 +6,7 @@
 
 ## Live state
 
-- **Working end-to-end**: Right Alt hold → speak → release → polished paste into focused app. Proven in the wild by Kenneth's own dictation.
+- **Working end-to-end**: Right Alt hold → speak → release → polished paste into focused app. Proven in the wild by a real dictation.
 - **Services** (`systemctl --user`): `yawc-evdev` (hold capture + STT resident), `yawc-pill` (overlay). Both active; evdev preloads llama-server once at startup — warm all day.
 - **Latency** (`~/.local/share/yawc/latency.log`, JSONL per utterance): simple ~0.94s E2E warm (regex fast path), backtrack +~200ms LLM (~700ms first uncached hit).
 - **Eval gates all pass**: EN WER 6.9% (<8) · TL CER 8.9% (<12) · Taglish CER 3.9% (<25) · DNT 1.0 (≥0.9) · boundary 1/1 (≥0.75). Run: `python3 -m eval.harness --harness eval/harness.jsonl`.
@@ -23,11 +23,11 @@
 
 ## Open items
 
-1. **Dogfooding** (Kenneth): command mode (Ctrl+Alt+X hold), transforms (Mod+Shift+T/R/S), snippets, natural backtrack — a week of real use decides everything below.
+1. **Dogfooding**: command mode (Ctrl+Alt+X hold), transforms (Mod+Shift+T/R/S), snippets, natural backtrack — a week of real use decides everything below.
 2. **Boundary corpus thin**: 1 kamag-anak, 0 hanggang ngayon utterances; research/07 wants ≥4. Record more via `eval/record.py`.
 3. **Deferred refactor — command pipeline**: `command_release` bypasses Dictation (no backtrack/context). Fold into Utterance.transform_mode when usage justifies.
 4. **Deferred refactor — pill ownership**: pill written from Dictation AND Recorder (double polished(), idle-after-sleep(2)). Move all UI writes into Recorder.
-5. **Minor**: injection re-walks context for password guard (~80ms, TOCTOU regardless); personal hotwords (Kenneth/EDSA) live in repo config fallback until install.sh ships defaults.
+5. **Minor**: injection re-walks context for password guard (~80ms, TOCTOU regardless); personal hotwords (EDSA + a personal name) live in repo config fallback until install.sh ships defaults.
 
 ## Recent history (2026-08-26 session)
 

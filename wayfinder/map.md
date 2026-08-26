@@ -8,7 +8,7 @@ A buildable **spec + ordered ticket sequence** for a **100% offline** (no audio/
 
 - **Domain:** offline voice dictation + local LLM polish + Wayland OS glue
 - **Skills every session should consult:** `grilling` + `domain-modeling` (always), `research` for STT/LLM/TTS facts, `prototype` for niri hotkey/injection and context-reading proofs, `implement` only after map complete
-- **Standing preferences (Kenneth):** YAGNI/simplicity first; privacy = verifiable offline not policy toggles; truthful claims with evidence matching claim; reuse existing Arch/CachyOS + Tauri/Rust conventions before abstractions; surgical changes; prefer local state; never touch production/live data without explicit request
+- **Standing preferences (owner):** YAGNI/simplicity first; privacy = verifiable offline not policy toggles; truthful claims with evidence matching claim; reuse existing Arch/CachyOS + Tauri/Rust conventions before abstractions; surgical changes; prefer local state; never touch production/live data without explicit request
 - **Machine truth (2026-08-26):** CachyOS rolling, Wayland `niri` + `xwayland`, PipeWire 1.6.8, `RTX 3050 Laptop 4GB` (CUDA 13.3, compute 8.6), 15 GiB RAM, 671 GiB free. Models installed (`~/.local/share/yawc/models/`): faster-whisper-large-v3-turbo 1.6G + Qwen3-1.7B-Q4_K_M 1.2G. Phase 1 built and gated — see HANDOFF.md for live state.
 - **Wispr invariants to match/parity check:** hold-release full-context (not streaming), <700 ms Wispr target → <1 s local target for short utterances, clipboard paste with restore, 100+ langs (our scope EN+TL only), context categories Email/Work/Personal/Other, style per category (EN/desktop)
 - **Label convention:** map `wayfinder:map`, tickets `wayfinder:research|prototype|grilling|task`
