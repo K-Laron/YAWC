@@ -109,7 +109,7 @@ def _atspi_cursor(budget_ms: int = 40) -> tuple[str, bool]:
 
 def _primary_selection() -> str:
     try:
-        out = subprocess.run(["wl-paste", "-p"], capture_output=True, text=True, timeout=0.05)
+        out = subprocess.run(["wl-paste", "-p"], capture_output=True, text=True, errors="replace", timeout=0.05)
         return out.stdout[:80] if out.stdout else ""
     except Exception:
         return ""

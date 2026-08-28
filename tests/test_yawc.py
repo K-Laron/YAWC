@@ -104,7 +104,7 @@ else:
 # injection — clipboard poll converges on fresh text, restores user clipboard
 from src.injection import _clipboard_settled
 if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
-    orig = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout
+    orig = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout
     # DEVNULL: wl-copy daemonizes — its child must not hold the test's stdout pipes
     def _copy(s):
         subprocess.run(["wl-copy"], input=s, text=True,

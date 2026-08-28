@@ -18,14 +18,14 @@ def _clipboard_settled(text: str, cap_s: float = 0.15) -> bool:
     startswith, not ==: clipboard managers may re-serve with trailing newline."""
     deadline = time.time() + cap_s
     while time.time() < deadline:
-        if subprocess.run(["wl-paste"], capture_output=True, text=True).stdout.startswith(text):
+        if subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout.startswith(text):
             return True
         time.sleep(0.005)
     return False
 
 
 def _wtype_paste(text: str, restore: bool) -> bool:
-    orig = subprocess.run(["wl-paste"], capture_output=True, text=True).stdout \
+    orig = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout \
         if os.environ.get("WAYLAND_DISPLAY") else ""
     subprocess.run(["wl-copy"], input=text, text=True)
     _clipboard_settled(text)
@@ -46,6 +46,7 @@ def _ydotool_paste(text: str, restore: bool) -> bool:
         return True
     except Exception:
         return False
+
 
 
 def inject(text: str, restore: bool = True, is_password: bool | None = None) -> bool:

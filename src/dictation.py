@@ -37,6 +37,14 @@ class Dictation:
         pol_ms = (time.perf_counter() - t2) * 1000
         total_ms = (time.perf_counter() - t0) * 1000
         self._log_latency(stt_ms, ctx_ms, pol_ms, total_ms)
+        # trace: raw vs polished split — enabled by `touch /tmp/yawc-trace`, local only
+        try:
+            import pathlib
+            if pathlib.Path("/tmp/yawc-trace").exists():
+                with open("/tmp/yawc-debug-transcript.log", "a") as tf:
+                    tf.write(f"[{int(time.time())}] raw: {raw!r}\npolished: {res!r}\n---\n")
+        except Exception:
+            pass
         return res
 
     def _log_latency(self, stt_ms: float, ctx_ms: float, pol_ms: float, total_ms: float):
