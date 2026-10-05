@@ -59,14 +59,15 @@ Before declaring dictation work complete, verify:
 ---
 
 ## Dev servers & verification
-- Start daemon locally: `./yawc-daemon --debug`
+- Inspect daemon service: `systemctl --user status yawc-evdev`
+- Start supervisor directly: `python3 -m src.evdev_hold`
 - Check offline isolation: `bash packaging/offline-proof.sh`
 - Stop what you started, by the tracked PID.
 
 ### Verifying
 - Smallest proof that the change works:
-  - Unit tests: `pytest tests/test_<module>.py`
-  - Eval benchmarks: `python eval/run_benchmarks.py --gate do-not-translate`
+  - Unit tests: `python3 tests/test_yawc.py`
+  - Eval benchmarks: `python3 -m eval.harness --harness eval/harness.jsonl`
 - **Do not run full evaluation sweeps** unless instructed.
 
 ---

@@ -128,9 +128,14 @@ _AUDIT_CALLS = 0
 def _prune_audit(log: pathlib.Path, now: float) -> None:
     try:
         cutoff = now - 14 * 86400
-        lines = [ln for ln in log.read_text().splitlines()
-                 if json.loads(ln).get("ts", 0) >= cutoff]
-        log.write_text("\n".join(lines) + "\n")
+        lines = []
+        for ln in log.read_text().splitlines():
+            try:
+                if json.loads(ln).get("ts", 0) >= cutoff:
+                    lines.append(ln)
+            except Exception:
+                pass
+        log.write_text("\n".join(lines) + ("\n" if lines else ""))
     except Exception:
         pass
 

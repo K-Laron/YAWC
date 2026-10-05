@@ -297,7 +297,8 @@ def transform_text(text: str, mode: str = "concise") -> str:
     custom_data = _read_config_json("transforms.json")
     if custom_data and isinstance(custom_data, dict):
         for c in custom_data.get("custom", []):
-            prompts[c["name"]] = c["prompt"]
+            if isinstance(c, dict) and "name" in c and "prompt" in c:
+                prompts[c["name"]] = c["prompt"]
     instruction = prompts.get(mode, mode)  # unknown mode = free-text instruction (05)
     if not _ensure_server():
         return _regex_transform(text, mode)

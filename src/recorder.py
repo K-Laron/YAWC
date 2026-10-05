@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ponytail: Recorder — the ONE hold->release capture state machine per 03/08.
+# ponytail: Recorder deep module — single owner of arecord + hold state file.
 # Owns: mode file, arecord lifecycle, ALL pill states (sole writer — open item 4),
 # polished->idle tail. Entry points choose name + on-release callback.
 # Distinct `name` per entry = distinct /tmp files, so entries can't clobber.
@@ -10,17 +10,19 @@ import src.pill as pill
 
 class Recorder:
     def __init__(self, name: str, on_release):
-        """on_release(wav_path) -> result text (None = no usable audio)."""
         self.mode = pathlib.Path(f"/tmp/yawc-{name}.hold")
         self.wav = pathlib.Path(f"/tmp/yawc-{name}.wav")
         self.on_release = on_release
         self.proc: subprocess.Popen | None = None
         self._gen = 0  # increments each begin; tail only idles if no newer hold
         self._lock = threading.Lock()
+        self._busy = False  # True while release/transcription/cleanup is in flight
 
     def begin(self):
         with self._lock:
-            # One hold at a time: RIGHTALT fires on multiple evdev nodes — second node no-op
+            # Reject if busy cleaning up previous utterance or already recording
+            if self._busy:
+                return
             if self.proc is not None and self.proc.poll() is None:
                 return
             self._gen += 1
@@ -34,9 +36,10 @@ class Recorder:
         """Hold ended: flush capture, run pipeline, render outcome tail.
         Atomic test-and-set ensures multi-node evdev releases cannot duplicate pipeline."""
         with self._lock:
-            proc = self.proc
-            if proc is None:
+            if self._busy or self.proc is None:
                 return None
+            self._busy = True
+            proc = self.proc
             self.proc = None
             gen = self._gen
             self.mode.unlink(missing_ok=True)
@@ -63,10 +66,13 @@ class Recorder:
                 pass
             pill.polished(result if result else "no audio")
 
+            with self._lock:
+                self._busy = False
+
             def _idle_tail():
                 time.sleep(2)  # outcome flash duration
                 with self._lock:
-                    if self._gen == gen and self.proc is None:
+                    if self._gen == gen and self.proc is None and not self._busy:
                         pill.idle()
 
             threading.Thread(target=_idle_tail, daemon=True).start()
@@ -74,8 +80,8 @@ class Recorder:
         return result
 
     def toggle(self):
-        """Spawn-per-press entries: one process per key press."""
-        if self.mode.exists():
-            self.release()
-        else:
-            self.begin()
+        # 07 toggle mode: first call begins, second releases
+        if self.proc is not None and self.proc.poll() is None:
+            return self.release()
+        self.begin()
+        return None

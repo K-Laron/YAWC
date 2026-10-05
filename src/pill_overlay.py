@@ -94,12 +94,11 @@ class PillWindow(Gtk.Window):
     def _mic_level(self):
         # Read live wav tail for real amplitude; fallback to None -> synthetic
         try:
-            p = None
-            for cand in _WAV_CANDIDATES:
-                if cand.exists():
-                    p = cand
-                    break
-            if not p or p.stat().st_size <= 48:
+            existing = [p for p in _WAV_CANDIDATES if p.exists()]
+            if not existing:
+                return None
+            p = max(existing, key=lambda f: f.stat().st_mtime_ns)
+            if p.stat().st_size <= 48:
                 return None
             size = p.stat().st_size
             with open(p, "rb") as f:
