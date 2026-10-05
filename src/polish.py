@@ -156,7 +156,8 @@ def _strip_think(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
+_RUNTIME_DIR = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+LLM_PIDFILE = (_RUNTIME_DIR / "yawc-llama.pid") if (_RUNTIME_DIR.exists() and os.access(_RUNTIME_DIR, os.W_OK)) else pathlib.Path(f"/tmp/yawc-llama-{os.getuid()}.pid")
 
 
 def _is_llama_proc(pid: int) -> bool:
@@ -197,9 +198,15 @@ def _spawn_llm() -> bool:
                         return True
                 return llm_alive()
             else:
-                LLM_PIDFILE.unlink(missing_ok=True)
+                try:
+                    LLM_PIDFILE.unlink(missing_ok=True)
+                except OSError:
+                    pass
         except Exception:
-            LLM_PIDFILE.unlink(missing_ok=True)
+            try:
+                LLM_PIDFILE.unlink(missing_ok=True)
+            except OSError:
+                pass
     cmd = [
         LLM_BIN,
         "-m", str(LLM_MODEL),
@@ -211,7 +218,10 @@ def _spawn_llm() -> bool:
     ]
     _llm_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        LLM_PIDFILE.unlink(missing_ok=True)
+        try:
+            LLM_PIDFILE.unlink(missing_ok=True)
+        except OSError:
+            pass
         with LLM_PIDFILE.open("x") as f:
             f.write(str(_llm_proc.pid))
     except Exception:
@@ -248,14 +258,21 @@ def teardown_llm():
         os.kill(int(LLM_PIDFILE.read_text()), 15)
     except Exception:
         pass
-    LLM_PIDFILE.unlink(missing_ok=True)
+    try:
+        LLM_PIDFILE.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
-def preload_llm():
+def preload_llm() -> bool:
     # both models fit this card (whisper ~1.1G + llama ~1.45G + desktop ≈ 3.5/4G).
     # Long-lived daemons call this once at startup; one-shot CLIs never do.
-    if not llm_alive():
-        _spawn_llm()
+    try:
+        if not llm_alive():
+            return _spawn_llm()
+        return True
+    except Exception:
+        return False
 
 
 def _get_http_conn(timeout_s: float) -> http.client.HTTPConnection:
