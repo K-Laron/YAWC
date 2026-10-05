@@ -62,10 +62,30 @@ class Recorder:
             self.pid_file.unlink(missing_ok=True)
             return None
 
+    def _is_busy(self) -> bool:
+        if self._busy:
+            return True
+        if not self.busy_file.exists():
+            return False
+        try:
+            content = self.busy_file.read_text().strip()
+            if not content:
+                self.busy_file.unlink(missing_ok=True)
+                return False
+            pid = int(content)
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            self.busy_file.unlink(missing_ok=True)
+            return False
+        except Exception:
+            self.busy_file.unlink(missing_ok=True)
+            return False
+
     def begin(self):
         with self._lock, self._flock():
             # Reject if busy cleaning up previous utterance or already recording
-            if self._busy or self.busy_file.exists():
+            if self._is_busy():
                 return
             if self.proc is not None and self.proc.poll() is None:
                 return
@@ -90,7 +110,7 @@ class Recorder:
         Captures state and marks busy under lock, then releases locks before
         stopping process or invoking on_release to avoid blocking caller event loops."""
         with self._lock, self._flock():
-            if self._busy or self.busy_file.exists():
+            if self._is_busy():
                 return None
             proc = self.proc
             pid = None
@@ -104,7 +124,7 @@ class Recorder:
 
             self._busy = True
             try:
-                self.busy_file.touch()
+                self.busy_file.write_text(str(os.getpid()))
             except Exception:
                 pass
             self.proc = None
@@ -155,7 +175,7 @@ class Recorder:
             def _idle_tail():
                 time.sleep(2)  # outcome flash duration
                 with self._lock:
-                    if self._gen == gen and self.proc is None and not self._busy and not self.busy_file.exists():
+                    if self._gen == gen and self.proc is None and not self._is_busy():
                         pill.idle()
 
             threading.Thread(target=_idle_tail, daemon=True).start()
@@ -165,7 +185,7 @@ class Recorder:
     def toggle(self):
         # 07 toggle mode: first call begins, second releases (cross-process aware)
         with self._flock():
-            is_active = (self.proc is not None and self.proc.poll() is None) or (self._read_pid_token() is not None) or self.mode.exists() or self.busy_file.exists()
+            is_active = (self.proc is not None and self.proc.poll() is None) or (self._read_pid_token() is not None) or self.mode.exists() or self._is_busy()
         if is_active:
             return self.release()
         self.begin()

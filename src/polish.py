@@ -77,6 +77,7 @@ _THINK_RE = re.compile(r"<think>.*?</think>", flags=re.S)
 _CONFIG_CACHE: dict[str, tuple[pathlib.Path, int, any]] = {}
 _HW_PAT_CACHE: tuple[str, list[tuple[re.Pattern, str]]] | None = None
 _http_conn: http.client.HTTPConnection | None = None
+_llm_proc: subprocess.Popen | None = None
 
 
 def _config(name: str) -> pathlib.Path:
@@ -158,6 +159,14 @@ def _strip_think(text: str) -> str:
 LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
 
 
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def llm_alive() -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.1) as r:
@@ -168,8 +177,26 @@ def llm_alive() -> bool:
 
 def _spawn_llm() -> bool:
     # 08: lazy cold start — spawn llama-server background, write pidfile, wait healthy <=3s
+    global _llm_proc
     if not LLM_MODEL.exists() or not shutil.which(LLM_BIN):
         return False
+    if _llm_proc is not None and _llm_proc.poll() is None:
+        for _ in range(30):
+            time.sleep(0.1)
+            if llm_alive():
+                return True
+        return llm_alive()
+    if LLM_PIDFILE.exists():
+        try:
+            pid = int(LLM_PIDFILE.read_text().strip())
+            if _is_pid_alive(pid):
+                for _ in range(30):
+                    time.sleep(0.1)
+                    if llm_alive():
+                        return True
+                return llm_alive()
+        except Exception:
+            pass
     cmd = [
         LLM_BIN,
         "-m", str(LLM_MODEL),
@@ -179,13 +206,16 @@ def _spawn_llm() -> bool:
         "-t", "4",
         "--log-disable",
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    LLM_PIDFILE.write_text(str(proc.pid))
+    _llm_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        LLM_PIDFILE.write_text(str(_llm_proc.pid))
+    except Exception:
+        pass
     for _ in range(30):
         time.sleep(0.1)
         if llm_alive():
             return True
-        if proc.poll() is not None:
+        if _llm_proc.poll() is not None:
             return False
     return False
 
@@ -198,6 +228,17 @@ def _ensure_server() -> bool:
 
 def teardown_llm():
     # 08: graceful shutdown via pidfile
+    global _llm_proc
+    if _llm_proc is not None and _llm_proc.poll() is None:
+        try:
+            _llm_proc.terminate()
+            _llm_proc.wait(timeout=0.3)
+        except Exception:
+            try:
+                _llm_proc.kill()
+            except Exception:
+                pass
+        _llm_proc = None
     try:
         os.kill(int(LLM_PIDFILE.read_text()), 15)
     except Exception:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# ponytail: Injection — ONE paste shape (wl-copy -> wtype ctrl-v, clipboard restore),
-# password guard always on. ydotool fallback for XWayland per 03.
+# ponytail: Injection deep module per 03 — Wayland clipboard paste, wtype Ctrl+Shift+V
+# into focused window, restore original clipboard. Password fields excluded (04 safety).
 import os, shutil, subprocess, time
 
 
@@ -21,9 +21,14 @@ def _clipboard_settled(text: str, cap_s: float = 0.15) -> bool:
     delays = (0.005, 0.010, 0.020, 0.025)
     step = 0
     while time.time() < deadline:
-        res = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace")
-        if res.stdout.startswith(text):
-            return True
+        try:
+            res = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace", timeout=0.04)
+            if res.stdout.startswith(text):
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
         delay = delays[min(step, len(delays) - 1)]
         time.sleep(delay)
         step += 1
@@ -40,20 +45,28 @@ def _wtype_paste(text: str, restore: bool) -> bool:
         subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], timeout=1)
     except Exception:
         return False
-    time.sleep(0.05)  # let the target app read clipboard before restore
-    if restore and orig:
+    if restore:
+        time.sleep(0.05)  # 50ms hold gives Wayland app time to consume paste event
         subprocess.run(["wl-copy"], input=orig, text=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
 
 
 def _ydotool_paste(text: str, restore: bool) -> bool:
-    os.environ.setdefault("YDOTOOL_SOCKET", "/tmp/.ydotool_socket")
+    orig = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout \
+        if os.environ.get("WAYLAND_DISPLAY") else ""
+    subprocess.run(["wl-copy"], input=text, text=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _clipboard_settled(text)
     try:
-        subprocess.run(["ydotool", "type", text], timeout=1)
-        return True
+        subprocess.run(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], timeout=1)
     except Exception:
         return False
+    if restore:
+        time.sleep(0.05)
+        subprocess.run(["wl-copy"], input=orig, text=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 def inject(text: str, restore: bool = True, is_password: bool | None = None) -> bool:
