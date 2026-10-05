@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-# ponytail: Context deep module per 04 — app (niri 10ms) + cursor ±80 (Atspi 40ms,
-# primary-selection fallback) + IDE file tag from title. Total ≤80ms, skip if slow.
-# All on-device. Password/URL detection here too (04 exclusion + injection guard).
-import fcntl, json, pathlib, re, subprocess, time
-from dataclasses import dataclass
+# ponytail: Context Engine — retrieve focused app context in <80ms (p95 target 50ms).
+# Reads niri focused window, queries Atspi caret text (±80 chars), tags active file.
+# 04 safety: terminal emulator exclusions, password fields never read, audit log.
+import dataclasses, fcntl, json, os, pathlib, re, subprocess, time
 
-FILE_RE = re.compile(r"[\w./-]+\.(py|rs|ts|tsx|js|jsx|json|md|kdl|toml|go|c|cpp|h|css|html|sh)\b")
-
-# Module-level Atspi import to eliminate dynamic import overhead in recursive traversals
 try:
     import gi
     gi.require_version("Atspi", "2.0")
@@ -17,24 +13,28 @@ except Exception:
     HAS_ATSPI = False
 
 
-@dataclass
+@dataclasses.dataclass(frozen=True)
 class CursorContext:
-    """02 prompt contract owner — built once here, never string-parsed elsewhere."""
     cursor_left: str = ""
-    cat: str = ""
+    cat: str = "Other"
 
     def prompt_header(self) -> str:
-        cat = self.cat or "Other"
-        return f'left="{self.cursor_left}" app={cat}'
+        return f'left="{self.cursor_left}" app={self.cat}'
+
+
+FILE_RE = re.compile(r"[\w\-./]+\.(?:py|rs|go|ts|js|c|cpp|md|toml|json|ya?ml|html|css)")
 
 
 def _niri_window() -> dict:
+    # 04: read focused window from niri IPC in <10ms
     try:
         out = subprocess.run(["niri", "msg", "-j", "focused-window"],
-                             capture_output=True, text=True, timeout=0.05)
-        return json.loads(out.stdout) or {}  # niri returns literal null when nothing focused
+                             capture_output=True, text=True, timeout=0.03)
+        if out.returncode == 0 and out.stdout.strip():
+            return json.loads(out.stdout)
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 def categorize(app_id: str, title: str) -> str:
@@ -75,7 +75,10 @@ def _find_caret(node, deadline: float, depth: int = 0):
         state = node.get_state_set()
         if state.contains(Atspi.StateType.FOCUSED):
             try:
-                if node.get_text(0, 0):
+                if hasattr(node, "queryText"):
+                    if node.queryText() is not None:
+                        return node
+                elif node.get_text(0, 0):
                     return node
             except Exception:
                 pass
@@ -142,11 +145,13 @@ def _prune_audit(log: pathlib.Path, now: float) -> None:
 
 def _audit(win: dict, cat: str) -> None:
     # 04: on-device audit log of every context read, 14-day prune — never the text itself.
-    # O(1) append-only to prevent blocking dictation latency. Amortized 14-day pruning every 100 writes.
+    # O(1) append-only to prevent blocking dictation latency.
     # Protected with cross-process file lock so concurrent appends and pruning cannot lose records.
+    # Prunes every 100 writes or daily on elapsed time so low-volume processes also enforce 14-day retention.
     global _AUDIT_CALLS
     log = pathlib.Path.home() / ".local/share/yawc/context.log"
     lock_path = pathlib.Path.home() / ".local/share/yawc/context.lock"
+    prune_marker = pathlib.Path.home() / ".local/share/yawc/context.pruned"
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
@@ -159,8 +164,20 @@ def _audit(win: dict, cat: str) -> None:
                 with log.open("a") as f:
                     f.write(record)
                 _AUDIT_CALLS += 1
-                if _AUDIT_CALLS % 100 == 0:
+                prune_needed = (_AUDIT_CALLS % 100 == 0)
+                if not prune_needed:
+                    try:
+                        last_prune = prune_marker.stat().st_mtime if prune_marker.exists() else 0.0
+                        if now - last_prune > 86400:
+                            prune_needed = True
+                    except Exception:
+                        pass
+                if prune_needed:
                     _prune_audit(log, now)
+                    try:
+                        prune_marker.touch()
+                    except Exception:
+                        pass
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except Exception:

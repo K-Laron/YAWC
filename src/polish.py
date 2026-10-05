@@ -103,10 +103,9 @@ def _read_config_json(name: str):
 def load_hotwords() -> str:
     data = _read_config_json("dictionary.json")
     if data and isinstance(data, list):
-        try:
-            return " ".join(x["term"] for x in data)
-        except Exception:
-            pass
+        terms = [x["term"] for x in data if isinstance(x, dict) and isinstance(x.get("term"), str) and x["term"].strip()]
+        if terms:
+            return " ".join(terms)
     return "Priya kamag-anak hanggang ngayon"
 
 
@@ -127,6 +126,8 @@ def expand_snippets(text: str) -> str:
         return text
     low = text.lower()
     for cue, body in snips.items():
+        if not isinstance(cue, str) or not isinstance(body, str):
+            continue
         if cue.lower() in low:
             text = re.sub(re.escape(cue), body, text, flags=re.I)
     return text
@@ -150,52 +151,53 @@ def regex_polish(text: str, cursor_left: str = "") -> str:
     return t
 
 
-def _strip_think(s: str) -> str:
-    # Qwen3 may emit <think> even with /no_think — never paste it
-    return _THINK_RE.sub("", s).strip()
+def _strip_think(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
 
 
 LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
-_LLM_ARGV = [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
-             "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"]
 
 
 def llm_alive() -> bool:
-    # the running server is the state — port health, not any Python global
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.2)
-        return True
+        with urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.1) as r:
+            return r.status == 200
     except Exception:
         return False
 
 
-def _spawn_llm():
-    # single spawn site; pidfile makes release work across processes
-    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
-        return None
-    proc = subprocess.Popen(_LLM_ARGV,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def _spawn_llm() -> bool:
+    # 08: lazy cold start — spawn llama-server background, write pidfile, wait healthy <=3s
+    if not LLM_MODEL.exists() or not shutil.which(LLM_BIN):
+        return False
+    cmd = [
+        LLM_BIN,
+        "-m", str(LLM_MODEL),
+        "--port", str(LLM_PORT),
+        "-ngl", "99",
+        "-c", "2048",
+        "-t", "4",
+        "--log-disable",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     LLM_PIDFILE.write_text(str(proc.pid))
-    return proc
-
-
-def _ensure_server(timeout_s: float = 0.3) -> bool:
-    """True when a server answers :8934. Short budget: cold load must not eat
-    the polish deadline — first utterance falls back to regex while the model
-    finishes loading in background."""
-    if llm_alive():
-        return True
-    proc = _spawn_llm()
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    for _ in range(30):
+        time.sleep(0.1)
         if llm_alive():
             return True
-        time.sleep(0.05)
-    return proc is not None and proc.poll() is None
+        if proc.poll() is not None:
+            return False
+    return False
 
 
-def release_llm():
-    # kill by pidfile so any process can tear down any server (orphans included)
+def _ensure_server() -> bool:
+    if llm_alive():
+        return True
+    return _spawn_llm()
+
+
+def teardown_llm():
+    # 08: graceful shutdown via pidfile
     try:
         os.kill(int(LLM_PIDFILE.read_text()), 15)
     except Exception:
@@ -216,6 +218,8 @@ def _get_http_conn(timeout_s: float) -> http.client.HTTPConnection:
         _http_conn = http.client.HTTPConnection("127.0.0.1", LLM_PORT, timeout=timeout_s)
     else:
         _http_conn.timeout = timeout_s
+        if _http_conn.sock is not None:
+            _http_conn.sock.settimeout(timeout_s)
     return _http_conn
 
 
@@ -296,9 +300,11 @@ def transform_text(text: str, mode: str = "concise") -> str:
                "structure": "Turn into bullets or short paragraphs where it helps. Keep Taglish."}
     custom_data = _read_config_json("transforms.json")
     if custom_data and isinstance(custom_data, dict):
-        for c in custom_data.get("custom", []):
-            if isinstance(c, dict) and "name" in c and "prompt" in c:
-                prompts[c["name"]] = c["prompt"]
+        custom_list = custom_data.get("custom")
+        if isinstance(custom_list, list):
+            for c in custom_list:
+                if isinstance(c, dict) and isinstance(c.get("name"), str) and isinstance(c.get("prompt"), str):
+                    prompts[c["name"]] = c["prompt"]
     instruction = prompts.get(mode, mode)  # unknown mode = free-text instruction (05)
     if not _ensure_server():
         return _regex_transform(text, mode)

@@ -16,17 +16,16 @@ def _is_password_field() -> bool:
 def _clipboard_settled(text: str, cap_s: float = 0.15) -> bool:
     """wl-copy daemonizes — poll until new text is served (<10ms typical).
     startswith, not ==: clipboard managers may re-serve with trailing newline.
-    Immediate check + progressive delays minimize process spawn overhead while converging fast."""
+    Progressive delays minimize process spawn overhead while converging fast."""
     deadline = time.time() + cap_s
-    delays = (0.0, 0.005, 0.010, 0.020, 0.025)
+    delays = (0.005, 0.010, 0.020, 0.025)
     step = 0
     while time.time() < deadline:
         res = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace")
         if res.stdout.startswith(text):
             return True
         delay = delays[min(step, len(delays) - 1)]
-        if delay > 0:
-            time.sleep(delay)
+        time.sleep(delay)
         step += 1
     return False
 
@@ -58,18 +57,15 @@ def _ydotool_paste(text: str, restore: bool) -> bool:
 
 
 def inject(text: str, restore: bool = True, is_password: bool | None = None) -> bool:
-    """is_password: fact from the caller's context walk. None = unknown -> walk
-    here (safe default for CLI); hot path passes it to skip the second walk."""
-    if not text:
+    # 04 invariant: password fields NEVER receive dictated text
+    pw = _is_password_field() if is_password is None else is_password
+    if pw:
         return False
-    if is_password is None:
-        is_password = _is_password_field()
-    if is_password:
-        return False  # 04 exclusion: never type into password fields
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wtype"):
+    if not text:
+        return True
+    # prefer wtype (wayland-native, no root daemon); fall back to ydotool for XWayland
+    if shutil.which("wtype"):
         return _wtype_paste(text, restore)
     if shutil.which("ydotool"):
         return _ydotool_paste(text, restore)
-    subprocess.run(["wl-copy"], input=text, text=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # last resort: clipboard only
     return False

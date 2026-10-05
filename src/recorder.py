@@ -29,6 +29,7 @@ class Recorder:
         self.wav = pathlib.Path(f"/tmp/yawc-{name}.wav")
         self.pid_file = pathlib.Path(f"/tmp/yawc-{name}.pid")
         self.lock_file = pathlib.Path(f"/tmp/yawc-{name}.lock")
+        self.busy_file = pathlib.Path(f"/tmp/yawc-{name}.busy")
         self.on_release = on_release
         self.proc: subprocess.Popen | None = None
         self._gen = 0  # increments each begin; tail only idles if no newer hold
@@ -64,7 +65,7 @@ class Recorder:
     def begin(self):
         with self._lock, self._flock():
             # Reject if busy cleaning up previous utterance or already recording
-            if self._busy:
+            if self._busy or self.busy_file.exists():
                 return
             if self.proc is not None and self.proc.poll() is None:
                 return
@@ -86,9 +87,10 @@ class Recorder:
 
     def release(self):
         """Hold ended: flush capture, run pipeline, render outcome tail.
-        Inter-process and in-process locks ensure single execution across all callers."""
+        Captures state and marks busy under lock, then releases locks before
+        stopping process or invoking on_release to avoid blocking caller event loops."""
         with self._lock, self._flock():
-            if self._busy:
+            if self._busy or self.busy_file.exists():
                 return None
             proc = self.proc
             pid = None
@@ -101,62 +103,69 @@ class Recorder:
                 return None
 
             self._busy = True
+            try:
+                self.busy_file.touch()
+            except Exception:
+                pass
             self.proc = None
             gen = self._gen
 
-            if proc is not None:
-                proc.terminate()  # SIGTERM lets arecord flush the wav on exit
-                try:
-                    proc.wait(timeout=0.15)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            elif pid is not None:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    for _ in range(15):
-                        time.sleep(0.01)
-                        os.kill(pid, 0)
-                except OSError:
-                    pass  # process exited
-                else:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-
-            result = None
+        # Locks are now released; begin() or event loops can query state without blocking
+        if proc is not None:
+            proc.terminate()  # SIGTERM lets arecord flush the wav on exit
             try:
-                if self.wav.exists() and self.wav.stat().st_size > 44:
-                    pill.transcribing()
-                    result = self.on_release(str(self.wav))
-            except Exception as e:
-                print(f"[recorder] on_release failed: {e!r}", flush=True)
-                result = None
-            finally:
-                self.pid_file.unlink(missing_ok=True)
-                self.mode.unlink(missing_ok=True)
+                proc.wait(timeout=0.15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        elif pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(15):
+                    time.sleep(0.01)
+                    os.kill(pid, 0)
+            except OSError:
+                pass  # process exited
+            else:
                 try:
-                    self.wav.unlink(missing_ok=True)
-                except Exception:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
                     pass
-                pill.polished(result if result else "no audio")
+
+        result = None
+        try:
+            if self.wav.exists() and self.wav.stat().st_size > 44:
+                pill.transcribing()
+                result = self.on_release(str(self.wav))
+        except Exception as e:
+            print(f"[recorder] on_release failed: {e!r}", flush=True)
+            result = None
+        finally:
+            self.pid_file.unlink(missing_ok=True)
+            self.mode.unlink(missing_ok=True)
+            self.busy_file.unlink(missing_ok=True)
+            try:
+                self.wav.unlink(missing_ok=True)
+            except Exception:
+                pass
+            pill.polished(result if result else "no audio")
+            with self._lock:
                 self._busy = False
 
-                def _idle_tail():
-                    time.sleep(2)  # outcome flash duration
-                    with self._lock:
-                        if self._gen == gen and self.proc is None and not self._busy:
-                            pill.idle()
+            def _idle_tail():
+                time.sleep(2)  # outcome flash duration
+                with self._lock:
+                    if self._gen == gen and self.proc is None and not self._busy and not self.busy_file.exists():
+                        pill.idle()
 
-                threading.Thread(target=_idle_tail, daemon=True).start()
+            threading.Thread(target=_idle_tail, daemon=True).start()
 
-            return result
+        return result
 
     def toggle(self):
         # 07 toggle mode: first call begins, second releases (cross-process aware)
         with self._flock():
-            is_active = (self.proc is not None and self.proc.poll() is None) or (self._read_pid_token() is not None)
+            is_active = (self.proc is not None and self.proc.poll() is None) or (self._read_pid_token() is not None) or self.mode.exists() or self.busy_file.exists()
         if is_active:
             return self.release()
         self.begin()

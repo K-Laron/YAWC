@@ -2,7 +2,7 @@
 # ponytail: STT deep module per 01 — faster-whisper large-v3-turbo int8_float16 CUDA,
 # Silero VAD via vad_filter, language=None + task=transcribe (blocks translation),
 # hotwords via initial_prompt. Model singleton — load once, keep hot per 08.
-import array, math, os, pathlib, re
+import array, math, os, pathlib, re, sys
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")  # offline boundary: never fetch at runtime
 MODEL_DIR = pathlib.Path.home() / ".local/share/yawc/models/faster-whisper-large-v3-turbo"
@@ -57,27 +57,33 @@ def _load():
     return _model
 
 
-def _wav_is_silence(wav_path: str, thresh: float = 0.003) -> bool:
+def _wav_is_silence(wav_path: str, thresh: float = 0.008) -> bool:
     # ponytail: long silent holds (11s) hallucinate Icelandic/Spanish loops — catch before Whisper
     # Check whole-file RMS; short clips (<0.6s) let Whisper/VAD decide
     try:
         p = pathlib.Path(wav_path)
-        if not p.exists() or p.stat().st_size <= 44 + 9600:  # <0.3s
+        sz = p.stat().st_size if p.exists() else 0
+        if sz <= 44 + 9600:  # <0.3s
             return False
+        # Read bounded chunk (at most 1MB ≈ 32 seconds) to avoid large heap spikes
         with open(p, "rb") as f:
             f.seek(44)
-            data = f.read()
-        n_total = len(data) // 2
-        if n_total < 1024:
+            data = f.read(1024 * 1024)
+        n_bytes = len(data) - (len(data) % 2)
+        if n_bytes < 2048:
             return False
         # Native S16_LE array directly from bytes: zero Python int object allocations
         samples = array.array("h")
-        samples.frombytes(data[: n_total * 2])
+        samples.frombytes(data[:n_bytes])
+        if sys.byteorder == "big":
+            samples.byteswap()
+        n = len(samples)
+        if n < 1024:
+            return False
         # sample at most ~32k samples evenly to avoid scanning huge files fully
-        step = max(1, n_total // 32000)
-        sampled = samples[::step]
-        n = len(sampled)
-        rms = math.sqrt(sum(s * s for s in sampled) / n) / 32768.0
+        step = max(1, n // 32000)
+        sampled = samples[::step] if step > 1 else samples
+        rms = math.sqrt(sum(s * s for s in sampled) / len(sampled)) / 32768.0
         return rms < thresh
     except Exception:
         return False
@@ -129,10 +135,12 @@ def transcribe(wav_path: str, hotwords: str = "") -> str:
         try:
             if getattr(s, "no_speech_prob", 0) > 0.6:
                 continue
-            if getattr(s, "avg_logprob", 0) < -1.0:
+            if getattr(s, "avg_logprob", 0) < -1.2:
                 continue
         except Exception:
             pass
-        kept.append(s.text)
-    raw = " ".join(kept).strip()
-    return _dedupe_hallucination(raw)
+        t = s.text.strip()
+        if t:
+            kept.append(t)
+    out = " ".join(kept).strip()
+    return _dedupe_hallucination(out)
