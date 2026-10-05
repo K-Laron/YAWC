@@ -2,7 +2,7 @@
 # ponytail: Context deep module per 04 — app (niri 10ms) + cursor ±80 (Atspi 40ms,
 # primary-selection fallback) + IDE file tag from title. Total ≤80ms, skip if slow.
 # All on-device. Password/URL detection here too (04 exclusion + injection guard).
-import json, pathlib, re, subprocess, time
+import fcntl, json, pathlib, re, subprocess, time
 from dataclasses import dataclass
 
 FILE_RE = re.compile(r"[\w./-]+\.(py|rs|ts|tsx|js|jsx|json|md|kdl|toml|go|c|cpp|h|css|html|sh)\b")
@@ -143,19 +143,26 @@ def _prune_audit(log: pathlib.Path, now: float) -> None:
 def _audit(win: dict, cat: str) -> None:
     # 04: on-device audit log of every context read, 14-day prune — never the text itself.
     # O(1) append-only to prevent blocking dictation latency. Amortized 14-day pruning every 100 writes.
+    # Protected with cross-process file lock so concurrent appends and pruning cannot lose records.
     global _AUDIT_CALLS
     log = pathlib.Path.home() / ".local/share/yawc/context.log"
+    lock_path = pathlib.Path.home() / ".local/share/yawc/context.lock"
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
         record = json.dumps({"ts": int(now), "app": win.get("app_id"),
                              "cat": cat,
                              "cursor_len": len(win.get("cursor_left", ""))}) + "\n"
-        with log.open("a") as f:
-            f.write(record)
-        _AUDIT_CALLS += 1
-        if _AUDIT_CALLS % 100 == 0:
-            _prune_audit(log, now)
+        with lock_path.open("a") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                with log.open("a") as f:
+                    f.write(record)
+                _AUDIT_CALLS += 1
+                if _AUDIT_CALLS % 100 == 0:
+                    _prune_audit(log, now)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except Exception:
         pass
 
