@@ -42,14 +42,15 @@ def _wtype_paste(text: str, restore: bool) -> bool:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _clipboard_settled(text)
     try:
-        subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], timeout=1)
+        r = subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], timeout=1)
+        ok = r.returncode == 0
     except Exception:
-        return False
+        ok = False
     if restore:
         time.sleep(0.05)  # 50ms hold gives Wayland app time to consume paste event
         subprocess.run(["wl-copy"], input=orig, text=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return True
+    return ok
 
 
 def _ydotool_paste(text: str, restore: bool) -> bool:
@@ -59,14 +60,15 @@ def _ydotool_paste(text: str, restore: bool) -> bool:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _clipboard_settled(text)
     try:
-        subprocess.run(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], timeout=1)
+        r = subprocess.run(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], timeout=1)
+        ok = r.returncode == 0
     except Exception:
-        return False
+        ok = False
     if restore:
         time.sleep(0.05)
         subprocess.run(["wl-copy"], input=orig, text=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return True
+    return ok
 
 
 def inject(text: str, restore: bool = True, is_password: bool | None = None) -> bool:

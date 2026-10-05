@@ -27,17 +27,23 @@ def available() -> bool:
 
 
 def _preload_cuda():
-    # CachyOS: torch/ctranslate2 need system CUDA libs in LD_LIBRARY_PATH
-    candidates = [
-        pathlib.Path("/opt/cuda/lib64"),
-        pathlib.Path("/usr/local/cuda/lib64"),
-        pathlib.Path.home() / ".local/lib",
-    ]
-    cur = os.environ.get("LD_LIBRARY_PATH", "")
-    for c in candidates:
-        if c.exists() and str(c) not in cur:
-            os.environ["LD_LIBRARY_PATH"] = f"{c}:{cur}" if cur else str(c)
-            break
+    # pip nvidia wheels: ctranslate2 needs libcublas/libcudnn — load RTLD_GLOBAL
+    # before faster_whisper touches CUDA. LD_LIBRARY_PATH alone does not work
+    # (loader reads it at startup), so ctypes-load explicitly. Covers systemd
+    # daemons plus /opt/cuda and /usr/local/cuda when present.
+    import ctypes, glob
+    dirs = glob.glob(os.path.expanduser("~/.local/lib/python3.*/site-packages/nvidia/*/lib"))
+    dirs += glob.glob("/usr/lib/python3*/site-packages/nvidia/*/lib")
+    for c in ("/opt/cuda/lib64", "/usr/local/cuda/lib64", str(pathlib.Path.home() / ".local/lib")):
+        if pathlib.Path(c).exists() and c not in dirs:
+            dirs.append(c)
+    for pat in ("libcudart.so*", "libcublasLt.so*", "libcublas.so*", "libcudnn*.so*"):
+        for d in dirs:
+            for so in sorted(glob.glob(f"{d}/{pat}")):
+                try:
+                    ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
 
 
 def _load():
@@ -98,21 +104,22 @@ def _dedupe_hallucination(text: str) -> str:
     if not text:
         return ""
     words = text.split()
-    if len(words) < 8:
-        return text
-    # 4-gram dedupe: slide window, require at least 3 consecutive copies before deleting
-    for n in (6, 5, 4):
-        i = 0
-        while i + 3 * n <= len(words):
-            phrase = [w.lower() for w in words[i:i + n]]
-            if phrase == [w.lower() for w in words[i + n:i + 2 * n]] and phrase == [w.lower() for w in words[i + 2 * n:i + 3 * n]]:
-                end = i + n
-                while end + n <= len(words) and phrase == [w.lower() for w in words[end:end + n]]:
-                    end += n
-                del words[i + n:end]
-            else:
-                i += 1
-    t = " ".join(words)
+    if len(words) >= 8:
+        # 4-gram dedupe: slide window, require at least 3 consecutive copies before deleting
+        for n in (6, 5, 4):
+            i = 0
+            while i + 3 * n <= len(words):
+                phrase = [w.lower() for w in words[i:i + n]]
+                if phrase == [w.lower() for w in words[i + n:i + 2 * n]] and phrase == [w.lower() for w in words[i + 2 * n:i + 3 * n]]:
+                    end = i + n
+                    while end + n <= len(words) and phrase == [w.lower() for w in words[end:end + n]]:
+                        end += n
+                    del words[i + n:end]
+                else:
+                    i += 1
+        t = " ".join(words)
+    else:
+        t = text
     # also strip single-token runs >3 ("ja ja ja ja" / "the the the the")
     t = _REPEAT_3_PLUS_RE.sub(r"\1", t)
     # catch Icelandic/Nordic loop tokens common in Turbo silence: "og", "að", "er", "sem"
