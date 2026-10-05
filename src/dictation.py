@@ -10,6 +10,7 @@ class Utterance:
     app_id: str = ""
     title: str = ""
     transform_mode: str = ""  # 05: concise/reword/structure/custom/free-text instruction
+    cat: str = ""             # 04 category cache: avoids redundant get_context walks
 
 
 class Dictation:
@@ -73,8 +74,8 @@ class Dictation:
 
     def _context(self, u: Utterance):
         from src import context
-        if u.cursor_left or u.app_id or u.title:
-            cat = context.categorize(u.app_id, u.title)
+        if u.cat or u.cursor_left or u.app_id or u.title:
+            cat = u.cat or context.categorize(u.app_id, u.title)
             cursor = u.cursor_left
         else:
             ctx = context.get_context(timeout_ms=80)  # audits itself per 04
@@ -108,7 +109,8 @@ def dictate_and_paste(wav_path: str) -> str:
     d = Dictation(hotwords=polish.load_hotwords())
     ctx = context.get_context(timeout_ms=80)
     u = Utterance(wav_path=wav_path, cursor_left=ctx.get("cursor_left", ""),
-                  app_id=ctx.get("app_id", ""), title=ctx.get("title", ""))
+                  app_id=ctx.get("app_id", ""), title=ctx.get("title", ""),
+                  cat=ctx.get("cat", "Other"))
     out = d.dictate(u)
     injection.inject(out, restore=True,
                      is_password=None if ctx.get("skip") else bool(ctx.get("is_password")))

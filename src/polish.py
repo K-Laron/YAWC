@@ -2,7 +2,7 @@
 # ponytail: Polish deep module per 02/05/06/08 — regex pass <5ms, llama-server LLM
 # warm on demand, regex fallback always holds. The running server is the state:
 # aliveness = port health, teardown = pidfile. Both models resident per 08 revision.
-import json, os, pathlib, re, shutil, subprocess, time, urllib.request
+import http.client, json, os, pathlib, re, shutil, subprocess, time, urllib.request
 
 CONFIG_DIR = pathlib.Path.home() / ".config/yawc"
 REPO_CONFIG = pathlib.Path(__file__).parent.parent / "config"
@@ -10,7 +10,6 @@ LLM_BIN = shutil.which("llama-server") or str(pathlib.Path.home() / ".local/shar
 LLM_MODEL = pathlib.Path(os.environ.get("YAWC_LLM_MODEL", pathlib.Path.home() / ".local/share/yawc/models/Qwen3-1.7B-Q4_K_M.gguf"))
 LLM_PORT = 8934
 
-# 02 system prompt — verbatim from research/02-local-llm-polish.md (single prompt, no branching)
 SYSTEM_PROMPT = """You are YAWC Polish — a deterministic text polisher for hold→release dictation. You run 100% offline on device. You MUST follow every rule. No exceptions.
 
 LANGUAGE (critical):
@@ -61,10 +60,24 @@ transcript: <<<TRANSCRIPT>>>
 
 ASSISTANT: (polished text only)"""
 
-# 05 command base — shared with 02, mode=command
 COMMAND_PROMPT = """You are YAWC Command — edit ONLY the selected text. Never translate Taglish. Output polished text only.
 Apply the spoken instruction to the selected text. Output ONLY the resulting text, no explanation, no quotes.
 /no_think"""
+
+# Precompiled regular expressions for fast path
+_CUES_RE = re.compile(r"\b(actually|scratch that|i mean|hindi pala|teka|first|second|third|dot)\b", re.I)
+_FILLER_RE = re.compile(r"\b(um|uh|ah|hmm)\b[,\s]*", flags=re.I)
+_MULTI_WS_RE = re.compile(r"\s+")
+_PUNCT_CLEAN_RE = re.compile(r"\s+([,.!?])")
+_CAP_START_RE = re.compile(r"(^|[.!?]\s+)(\w)")
+_STANDALONE_I_RE = re.compile(r"\bi\b")
+_THINK_RE = re.compile(r"<think>.*?</think>", flags=re.S)
+
+# Mtime-aware configuration cache
+_CONFIG_CACHE: dict[str, tuple[pathlib.Path, int, any]] = {}
+_HW_PAT_CACHE: tuple[str, list[tuple[re.Pattern, str]]] | None = None
+_http_conn: http.client.HTTPConnection | None = None
+_llm_proc: subprocess.Popen | None = None
 
 
 def _config(name: str) -> pathlib.Path:
@@ -72,23 +85,51 @@ def _config(name: str) -> pathlib.Path:
     return p if p.exists() else REPO_CONFIG / name
 
 
-def load_hotwords() -> str:
+def _read_config_json(name: str):
+    path = _config(name)
     try:
-        rows = json.loads(_config("dictionary.json").read_text())
-        return " ".join(x["term"] for x in rows)
+        if not path.exists():
+            return None
+        mtime = path.stat().st_mtime_ns
+        cached = _CONFIG_CACHE.get(name)
+        if cached and cached[0] == path and cached[1] == mtime:
+            return cached[2]
+        data = json.loads(path.read_text())
+        _CONFIG_CACHE[name] = (path, mtime, data)
+        return data
     except Exception:
-        return "Priya kamag-anak hanggang ngayon"
+        return None
+
+
+def load_hotwords() -> str:
+    data = _read_config_json("dictionary.json")
+    if data and isinstance(data, list):
+        terms = [x["term"] for x in data if isinstance(x, dict) and isinstance(x.get("term"), str) and x["term"].strip()]
+        if terms:
+            return " ".join(terms)
+    return "Priya kamag-anak hanggang ngayon"
+
+
+def _get_hotword_patterns() -> list[tuple[re.Pattern, str]]:
+    global _HW_PAT_CACHE
+    hw_str = load_hotwords()
+    if _HW_PAT_CACHE and _HW_PAT_CACHE[0] == hw_str:
+        return _HW_PAT_CACHE[1]
+    pats = [(re.compile(re.escape(hw), flags=re.I), hw) for hw in hw_str.split() if hw]
+    _HW_PAT_CACHE = (hw_str, pats)
+    return pats
 
 
 def expand_snippets(text: str) -> str:
     # 06: voice cue -> full formatted text, applied post-STT pre-polish
-    try:
-        snips = json.loads(_config("snippets.json").read_text())
-    except Exception:
+    snips = _read_config_json("snippets.json")
+    if not snips or not isinstance(snips, dict):
         return text
     low = text.lower()
     for cue, body in snips.items():
-        if cue in low:
+        if not isinstance(cue, str) or not isinstance(body, str):
+            continue
+        if cue.lower() in low:
             text = re.sub(re.escape(cue), body, text, flags=re.I)
     return text
 
@@ -97,13 +138,13 @@ def regex_polish(text: str, cursor_left: str = "") -> str:
     # 02 deterministic fallback — 5ms, meaning-preserving only
     if not text.strip():
         return ""
-    t = re.sub(r"\b(um|uh|ah|hmm)\b[,\s]*", "", text, flags=re.I)
-    t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(r"\s+([,.!?])", r"\1", t)
-    t = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), t)
-    t = re.sub(r"\bi\b", "I", t)  # English standalone i is always capital
-    for hw in load_hotwords().split():
-        t = re.sub(re.escape(hw), hw, t, flags=re.I)
+    t = _FILLER_RE.sub("", text)
+    t = _MULTI_WS_RE.sub(" ", t).strip()
+    t = _PUNCT_CLEAN_RE.sub(r"\1", t)
+    t = _CAP_START_RE.sub(lambda m: m.group(1) + m.group(2).upper(), t)
+    t = _STANDALONE_I_RE.sub("I", t)  # English standalone i is always capital
+    for pat, hw in _get_hotword_patterns():
+        t = pat.sub(hw, t)
     if t and t[-1] not in ".!?":
         t += "."
     if cursor_left and cursor_left[-1].isalnum() and t and t[0].isalnum():
@@ -111,78 +152,169 @@ def regex_polish(text: str, cursor_left: str = "") -> str:
     return t
 
 
-def _strip_think(s: str) -> str:
-    # Qwen3 may emit <think> even with /no_think — never paste it
-    return re.sub(r"<think>.*?</think>", "", s, flags=re.S).strip()
+def _strip_think(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
 
 
-LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
-_LLM_ARGV = [str(LLM_BIN), "-m", str(LLM_MODEL), "-c", "2048", "-ngl", "99",
-             "--host", "127.0.0.1", "--port", str(LLM_PORT), "-fa", "on", "-ctk", "q8_0"]
+_RUNTIME_DIR = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+LLM_PIDFILE = (_RUNTIME_DIR / "yawc-llama.pid") if (_RUNTIME_DIR.exists() and os.access(_RUNTIME_DIR, os.W_OK)) else pathlib.Path(f"/tmp/yawc-llama-{os.getuid()}.pid")
+
+
+def _is_llama_proc(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        comm = pathlib.Path(f"/proc/{pid}/comm").read_text().strip()
+        return LLM_BIN in comm or "llama" in comm
+    except (OSError, FileNotFoundError, PermissionError):
+        return False
 
 
 def llm_alive() -> bool:
-    # the running server is the state — port health, not any Python global
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.2)
+        with urllib.request.urlopen(f"http://127.0.0.1:{LLM_PORT}/health", timeout=0.1) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _spawn_llm() -> bool:
+    # 08: lazy cold start — spawn llama-server background, write pidfile, wait healthy <=300ms
+    global _llm_proc
+    if not LLM_MODEL.exists() or not shutil.which(LLM_BIN):
+        return False
+    if _llm_proc is not None and _llm_proc.poll() is None:
+        for _ in range(3):
+            time.sleep(0.1)
+            if llm_alive():
+                return True
+        return llm_alive()
+    if LLM_PIDFILE.exists():
+        try:
+            pid = int(LLM_PIDFILE.read_text().strip())
+            if _is_llama_proc(pid):
+                for _ in range(3):
+                    time.sleep(0.1)
+                    if llm_alive():
+                        return True
+                return llm_alive()
+            else:
+                try:
+                    LLM_PIDFILE.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except Exception:
+            try:
+                LLM_PIDFILE.unlink(missing_ok=True)
+            except OSError:
+                pass
+    cmd = [
+        LLM_BIN,
+        "-m", str(LLM_MODEL),
+        "--port", str(LLM_PORT),
+        "-ngl", "99",
+        "-c", "2048",
+        "-t", "4",
+        "--log-disable",
+    ]
+    _llm_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        try:
+            LLM_PIDFILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        with LLM_PIDFILE.open("x") as f:
+            f.write(str(_llm_proc.pid))
+    except Exception:
+        pass
+    for _ in range(3):
+        time.sleep(0.1)
+        if llm_alive():
+            return True
+        if _llm_proc.poll() is not None:
+            return False
+    return False
+
+
+def _ensure_server() -> bool:
+    if llm_alive():
+        return True
+    return _spawn_llm()
+
+
+def teardown_llm():
+    # 08: graceful shutdown via pidfile
+    global _llm_proc
+    if _llm_proc is not None and _llm_proc.poll() is None:
+        try:
+            _llm_proc.terminate()
+            _llm_proc.wait(timeout=0.3)
+        except Exception:
+            try:
+                _llm_proc.kill()
+            except Exception:
+                pass
+        _llm_proc = None
+    try:
+        os.kill(int(LLM_PIDFILE.read_text()), 15)
+    except Exception:
+        pass
+    try:
+        LLM_PIDFILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def preload_llm() -> bool:
+    # both models fit this card (whisper ~1.1G + llama ~1.45G + desktop ≈ 3.5/4G).
+    # Long-lived daemons call this once at startup; one-shot CLIs never do.
+    try:
+        if not llm_alive():
+            return _spawn_llm()
         return True
     except Exception:
         return False
 
 
-def _spawn_llm():
-    # single spawn site; pidfile makes release work across processes
-    if not (pathlib.Path(LLM_BIN).exists() and LLM_MODEL.exists()):
-        return None
-    proc = subprocess.Popen(_LLM_ARGV,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    LLM_PIDFILE.write_text(str(proc.pid))
-    return proc
-
-
-def _ensure_server(timeout_s: float = 0.3) -> bool:
-    """True when a server answers :8934. Short budget: cold load must not eat
-    the polish deadline — first utterance falls back to regex while the model
-    finishes loading in background."""
-    if llm_alive():
-        return True
-    proc = _spawn_llm()
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if llm_alive():
-            return True
-        time.sleep(0.05)
-    return proc is not None and proc.poll() is None
-
-
-def release_llm():
-    # kill by pidfile so any process can tear down any server (orphans included)
-    try:
-        os.kill(int(LLM_PIDFILE.read_text()), 15)
-    except Exception:
-        pass
-    LLM_PIDFILE.unlink(missing_ok=True)
-
-
-def preload_llm():
-    # both models fit this card (whisper ~1.1G + llama ~1.45G + desktop ≈ 3.5/4G).
-    # Long-lived daemons call this once at startup; one-shot CLIs never do.
-    if not llm_alive():
-        _spawn_llm()
+def _get_http_conn(timeout_s: float) -> http.client.HTTPConnection:
+    global _http_conn
+    if _http_conn is None:
+        _http_conn = http.client.HTTPConnection("127.0.0.1", LLM_PORT, timeout=timeout_s)
+    else:
+        _http_conn.timeout = timeout_s
+        if _http_conn.sock is not None:
+            _http_conn.sock.settimeout(timeout_s)
+    return _http_conn
 
 
 def _chat(messages: list, timeout_s: float) -> str:
     # /no_think: Qwen3 soft switch — thinking would eat max_tokens, content comes back empty
     messages = messages[:-1] + [{"role": messages[-1]["role"],
                                  "content": messages[-1]["content"] + "\n/no_think"}]
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{LLM_PORT}/v1/chat/completions",
-        data=json.dumps({"messages": messages, "temperature": 0.0, "top_p": 0.8,
-                         "max_tokens": 160, "repeat_penalty": 1.05}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout_s) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
+    body = json.dumps({"messages": messages, "temperature": 0.0, "top_p": 0.8,
+                       "max_tokens": 160, "repeat_penalty": 1.05}).encode()
+    headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
+
+    global _http_conn
+    conn = _get_http_conn(timeout_s)
+    try:
+        conn.request("POST", "/v1/chat/completions", body=body, headers=headers)
+        resp = conn.getresponse()
+        if resp.status == 200:
+            data = json.loads(resp.read().decode())
+            return data["choices"][0]["message"]["content"]
+    except Exception:
+        # Reconnect once on broken socket / server bounce
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _http_conn = http.client.HTTPConnection("127.0.0.1", LLM_PORT, timeout=timeout_s)
+        _http_conn.request("POST", "/v1/chat/completions", body=body, headers=headers)
+        resp = _http_conn.getresponse()
+        if resp.status == 200:
+            data = json.loads(resp.read().decode())
+            return data["choices"][0]["message"]["content"]
+    raise RuntimeError("LLM request failed")
 
 
 def _vram_free_mb() -> int | None:
@@ -204,7 +336,7 @@ def llm_polish(text: str, cursor_context, timeout_ms: int = 600) -> str:
     # contract: read cursor_left off the object — never re-parse the rendered header
     cur = getattr(cursor_context, "cursor_left", "") or ""
     # 02 deterministic fast path: short utterance, no backtrack/list cues -> regex only
-    cues = re.search(r"\b(actually|scratch that|i mean|hindi pala|teka|first|second|third|dot)\b", text, re.I)
+    cues = _CUES_RE.search(text)
     words = text.split()
     if len(words) <= 25 and not cues:
         return regex_polish(text, cur)
@@ -229,11 +361,13 @@ def transform_text(text: str, mode: str = "concise") -> str:
     prompts = {"concise": "Make this about 30% shorter. Keep every fact. Keep Taglish.",
                "reword": "Reword clearly, same length, fix grammar. Keep Tagalog/English mix.",
                "structure": "Turn into bullets or short paragraphs where it helps. Keep Taglish."}
-    try:
-        for c in json.loads(_config("transforms.json").read_text()).get("custom", []):
-            prompts[c["name"]] = c["prompt"]
-    except Exception:
-        pass
+    custom_data = _read_config_json("transforms.json")
+    if custom_data and isinstance(custom_data, dict):
+        custom_list = custom_data.get("custom")
+        if isinstance(custom_list, list):
+            for c in custom_list:
+                if isinstance(c, dict) and isinstance(c.get("name"), str) and isinstance(c.get("prompt"), str):
+                    prompts[c["name"]] = c["prompt"]
     instruction = prompts.get(mode, mode)  # unknown mode = free-text instruction (05)
     if not _ensure_server():
         return _regex_transform(text, mode)

@@ -2,12 +2,16 @@
 # ponytail: STT deep module per 01 — faster-whisper large-v3-turbo int8_float16 CUDA,
 # Silero VAD via vad_filter, language=None + task=transcribe (blocks translation),
 # hotwords via initial_prompt. Model singleton — load once, keep hot per 08.
-import os, pathlib
+import array, math, os, pathlib, re, sys
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")  # offline boundary: never fetch at runtime
 MODEL_DIR = pathlib.Path.home() / ".local/share/yawc/models/faster-whisper-large-v3-turbo"
-MODEL_NAME = "large-v3-turbo"
+MODEL_NAME = "deepdml/faster-whisper-large-v3-turbo-ct2"
 _model = None
+
+# Precompiled regular expressions for deduplication
+_REPEAT_3_PLUS_RE = re.compile(r"(\b.+?\b)(?:\s+\1){3,}", flags=re.I)
+_REPEAT_ICELANDIC_RE = re.compile(r"(\b[a-zA-Záðéíóöúýþæ]{3,}\b)(?:\s+\1){2,}", flags=re.I)
 
 
 class ModelMissing(Exception):
@@ -23,19 +27,17 @@ def available() -> bool:
 
 
 def _preload_cuda():
-    # pip nvidia wheels: ctranslate2 needs libcublas/libcudnn — load them RTLD_GLOBAL
-    # before faster_whisper touches CUDA (works for systemd-spawned processes too)
-    import ctypes, glob
-    dirs = glob.glob(os.path.expanduser("~/.local/lib/python3.*/site-packages/nvidia/*/lib"))
-    dirs += glob.glob("/usr/lib/python3*/site-packages/nvidia/*/lib")
-    pats = ["libcublasLt.so*", "libcublas.so*", "libcudnn*.so*"]
-    for pat in pats:
-        for d in dirs:
-            for so in sorted(glob.glob(f"{d}/{pat}")):
-                try:
-                    ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
-                except OSError:
-                    pass
+    # CachyOS: torch/ctranslate2 need system CUDA libs in LD_LIBRARY_PATH
+    candidates = [
+        pathlib.Path("/opt/cuda/lib64"),
+        pathlib.Path("/usr/local/cuda/lib64"),
+        pathlib.Path.home() / ".local/lib",
+    ]
+    cur = os.environ.get("LD_LIBRARY_PATH", "")
+    for c in candidates:
+        if c.exists() and str(c) not in cur:
+            os.environ["LD_LIBRARY_PATH"] = f"{c}:{cur}" if cur else str(c)
+            break
 
 
 def _load():
@@ -54,22 +56,37 @@ def _wav_is_silence(wav_path: str, thresh: float = 0.008) -> bool:
     # ponytail: long silent holds (11s) hallucinate Icelandic/Spanish loops — catch before Whisper
     # Check whole-file RMS; short clips (<0.6s) let Whisper/VAD decide
     try:
-        import struct, math
         p = pathlib.Path(wav_path)
-        if not p.exists() or p.stat().st_size <= 44 + 9600:  # <0.3s
+        sz = p.stat().st_size if p.exists() else 0
+        if sz <= 44 + 9600:  # <0.3s
             return False
+        audio_bytes = sz - 44
+        samples = array.array("h")
         with open(p, "rb") as f:
-            f.seek(44)
-            data = f.read()
-        # sample at most 3s evenly to avoid reading huge files fully
-        n_total = len(data) // 2
-        if n_total < 1024:
-            return False
-        # downsample: take every k-th sample for ~32k samples max
-        step = max(1, n_total // 32000)
-        samples = struct.unpack(f"<{n_total}h", data[: n_total * 2])[::step]
+            if audio_bytes <= 1024 * 1024:
+                f.seek(44)
+                data = f.read()
+                n_bytes = len(data) - (len(data) % 2)
+                samples.frombytes(data[:n_bytes])
+            else:
+                # Sample 32 chunks evenly across the file to cover beginning, middle, and end
+                num_chunks = 32
+                chunk_size = 32768  # 32KB = 16k samples = 1s per chunk
+                interval = (audio_bytes - chunk_size) // (num_chunks - 1)
+                for i in range(num_chunks):
+                    f.seek(44 + i * interval)
+                    data = f.read(chunk_size)
+                    n_bytes = len(data) - (len(data) % 2)
+                    samples.frombytes(data[:n_bytes])
+        if sys.byteorder == "big":
+            samples.byteswap()
         n = len(samples)
-        rms = math.sqrt(sum(s * s for s in samples) / n) / 32768.0
+        if n < 1024:
+            return False
+        # sample at most ~32k samples evenly to avoid scanning huge files fully
+        step = max(1, n // 32000)
+        sampled = samples[::step] if step > 1 else samples
+        rms = math.sqrt(sum(s * s for s in sampled) / len(sampled)) / 32768.0
         return rms < thresh
     except Exception:
         return False
@@ -78,45 +95,61 @@ def _wav_is_silence(wav_path: str, thresh: float = 0.008) -> bool:
 def _dedupe_hallucination(text: str) -> str:
     # ponytail: Whisper loops on silence/noise — "X X X" where X is 4+ words repeated.
     # Collapse consecutive repeated n-grams (4-7 words) instead of pasting the loop.
-    import re
     if not text:
-        return text
-    # quick compression check: highly repetitive text compresses well
+        return ""
     words = text.split()
-    if len(words) < 12:
+    if len(words) < 8:
         return text
-    # collapse "phrase, phrase, phrase" -> "phrase"
-    for n in (7, 6, 5, 4):
-        pat = r"\b((?:\w+(?:['-]\w+)?(?:\s+|$)){" + str(n) + r"})\1{2,}"
-        # use case-insensitive for hallucinated English loops
-        m = re.search(pat, text, flags=re.I)
-        if m:
-            # keep one copy of the repeated phrase
-            text = text[: m.start()] + m.group(1).strip() + text[m.end() :]
-            break
-    return re.sub(r"\s+", " ", text).strip()
+    # 4-gram dedupe: slide window, require at least 3 consecutive copies before deleting
+    for n in (6, 5, 4):
+        i = 0
+        while i + 3 * n <= len(words):
+            phrase = [w.lower() for w in words[i:i + n]]
+            if phrase == [w.lower() for w in words[i + n:i + 2 * n]] and phrase == [w.lower() for w in words[i + 2 * n:i + 3 * n]]:
+                end = i + n
+                while end + n <= len(words) and phrase == [w.lower() for w in words[end:end + n]]:
+                    end += n
+                del words[i + n:end]
+            else:
+                i += 1
+    t = " ".join(words)
+    # also strip single-token runs >3 ("ja ja ja ja" / "the the the the")
+    t = _REPEAT_3_PLUS_RE.sub(r"\1", t)
+    # catch Icelandic/Nordic loop tokens common in Turbo silence: "og", "að", "er", "sem"
+    t = _REPEAT_ICELANDIC_RE.sub(r"\1", t)
+    return t.strip()
+
+
+def preload():
+    # Long-lived daemons call this once at startup; one-shot CLIs never do.
+    _load()
 
 
 def transcribe(wav_path: str, hotwords: str = "") -> str:
     """wav (16kHz mono S16) -> raw transcript. Raises ModelMissing if no model."""
     if not available():
         raise ModelMissing("faster-whisper or model not installed — download per INSTALL.md")
-    # long silent holds hallucinate before Whisper even runs — skip the call
+    # 01/09: local faster-whisper inference in <150ms for short audio,
+    # never translates Taglish (language=None + task="transcribe").
+    # Silence guard runs first — avoid spinning GPU on empty audio.
     if _wav_is_silence(wav_path):
         return ""
     m = _load()
     segs, info = m.transcribe(
         wav_path,
-        language=None,          # auto EN/TL, never translates per 01
-        task="transcribe",
-        hotwords=hotwords or None,
-        initial_prompt="Transcribe Taglish code-switching exactly. Never translate Tagalog to English.",
-        beam_size=5,
-        vad_filter=True,        # Silero VAD bundled — trims silence per 01
-        vad_parameters=dict(min_silence_duration_ms=500, threshold=0.5),
-        condition_on_previous_text=False,  # break hallucination loops across segments
-        compression_ratio_threshold=2.4,
-        log_prob_threshold=-1.0,
+        language=None,             # auto-detect per utterance; EN + Tagalog both work
+        task="transcribe",         # CRITICAL: "translate" would force EN, violating 01
+        vad_filter=True,           # Silero VAD drops leading/trailing/inter-phrase silence
+        vad_parameters=dict(
+            min_silence_duration_ms=250,
+            speech_pad_ms=100,
+        ),
+        beam_size=1,               # greedy — fastest on RTX 3050 (<150ms typical)
+        best_of=1,
+        temperature=0.0,
+        initial_prompt=hotwords or None,  # dictionary hotwords bias acoustic decoder
+        condition_on_previous_text=False, # prevent cross-utterance hallucination bleed
+        log_prob_threshold=-1.0,   # drop pure noise hallucination segments
         no_speech_threshold=0.6,
     )
     # segment-level guard: Whisper still emits low-confidence hallucinations (e.g. Icelandic on silence)
@@ -130,6 +163,8 @@ def transcribe(wav_path: str, hotwords: str = "") -> str:
                 continue
         except Exception:
             pass
-        kept.append(s.text)
-    raw = " ".join(kept).strip()
-    return _dedupe_hallucination(raw)
+        t = s.text.strip()
+        if t:
+            kept.append(t)
+    out = " ".join(kept).strip()
+    return _dedupe_hallucination(out)

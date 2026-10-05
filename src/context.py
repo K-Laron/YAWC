@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-# ponytail: Context deep module per 04 — app (niri 10ms) + cursor ±80 (Atspi 40ms,
-# primary-selection fallback) + IDE file tag from title. Total ≤80ms, skip if slow.
-# All on-device. Password/URL detection here too (04 exclusion + injection guard).
-import json, pathlib, re, subprocess, time
-from dataclasses import dataclass
+# ponytail: Context Engine — retrieve focused app context in <80ms (p95 target 50ms).
+# Reads niri focused window, queries Atspi caret text (±80 chars), tags active file.
+# 04 safety: terminal emulator exclusions, password fields never read, audit log.
+import dataclasses, fcntl, json, os, pathlib, re, subprocess, time
 
-FILE_RE = re.compile(r"[\w./-]+\.(py|rs|ts|tsx|js|jsx|json|md|kdl|toml|go|c|cpp|h|css|html|sh)\b")
+try:
+    import gi
+    gi.require_version("Atspi", "2.0")
+    from gi.repository import Atspi
+    HAS_ATSPI = True
+except Exception:
+    HAS_ATSPI = False
 
 
-@dataclass
+@dataclasses.dataclass(frozen=True)
 class CursorContext:
-    """02 prompt contract owner — built once here, never string-parsed elsewhere."""
     cursor_left: str = ""
     cat: str = "Other"
 
@@ -18,18 +22,24 @@ class CursorContext:
         return f'left="{self.cursor_left}" app={self.cat}'
 
 
+FILE_RE = re.compile(r"[\w\-./]+\.(?:py|rs|go|ts|js|c|cpp|md|toml|json|ya?ml|html|css)")
+
+
 def _niri_window() -> dict:
+    # 04: read focused window from niri IPC in <10ms
     try:
         out = subprocess.run(["niri", "msg", "-j", "focused-window"],
-                             capture_output=True, text=True, timeout=0.05)
-        return json.loads(out.stdout) or {}  # niri returns literal null when nothing focused
+                             capture_output=True, text=True, timeout=0.03)
+        if out.returncode == 0 and out.stdout.strip():
+            return json.loads(out.stdout) or {}
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 def categorize(app_id: str, title: str) -> str:
     # 04 buckets; browser site sniff aggregates to same buckets
-    t, a = title.lower(), app_id.lower()
+    t, a = (title or "").lower(), (app_id or "").lower()
     if any(x in t for x in ["gmail", "outlook", "mail"]):
         return "Email"
     if any(x in a for x in ["slack", "teams", "zoom"]):
@@ -43,11 +53,7 @@ def categorize(app_id: str, title: str) -> str:
 
 def _walk_focused(deadline: float):
     """Find focused accessible object within time budget; None if slow."""
-    try:
-        import gi
-        gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi
-    except Exception:
+    if not HAS_ATSPI:
         return None
     try:
         desktop = Atspi.get_desktop(0)
@@ -63,21 +69,25 @@ def _walk_focused(deadline: float):
 
 
 def _find_caret(node, deadline: float, depth: int = 0):
-    try:
-        import gi
-        gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi
-    except Exception:
-        return None
-    if time.time() > deadline or depth > 6 or node is None:
+    if not HAS_ATSPI or node is None or depth > 6 or time.time() > deadline:
         return None
     try:
-        if node.get_state_set().contains(Atspi.StateType.FOCUSED) and node.get_text(0, 0):
-            return node
+        state = node.get_state_set()
+        if state.contains(Atspi.StateType.FOCUSED):
+            try:
+                if hasattr(node, "queryText"):
+                    if node.queryText() is not None:
+                        return node
+                elif node.get_text(0, 0):
+                    return node
+            except Exception:
+                pass
     except Exception:
         pass
     try:
         for k in range(node.get_child_count()):
+            if time.time() > deadline:
+                break
             found = _find_caret(node.get_child_at_index(k), deadline, depth + 1)
             if found is not None:
                 return found
@@ -88,14 +98,13 @@ def _find_caret(node, deadline: float, depth: int = 0):
 
 def _atspi_cursor(budget_ms: int = 40) -> tuple[str, bool]:
     """(cursor_left ±80 chars, is_password). Empty if nothing found in budget."""
+    if not HAS_ATSPI:
+        return "", False
     deadline = time.time() + budget_ms / 1000
     node = _walk_focused(deadline)
     if node is None:
         return "", False
     try:
-        import gi
-        gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi
         is_pw = node.get_role() == Atspi.Role.PASSWORD_TEXT
         text = node.queryText()
         caret = text.get_caret_offset()
@@ -116,28 +125,61 @@ def _primary_selection() -> str:
 
 
 TERMINALS = ("foot", "kitty", "alacritty", "wezterm", "gnome-terminal", "t3code", "code", "terminal")
+_AUDIT_CALLS = 0
+
+
+def _prune_audit(log: pathlib.Path, now: float) -> None:
+    try:
+        cutoff = now - 14 * 86400
+        lines = []
+        for ln in log.read_text().splitlines():
+            try:
+                if json.loads(ln).get("ts", 0) >= cutoff:
+                    lines.append(ln)
+            except Exception:
+                pass
+        log.write_text("\n".join(lines) + ("\n" if lines else ""))
+    except Exception:
+        pass
 
 
 def _audit(win: dict, cat: str) -> None:
     # 04: on-device audit log of every context read, 14-day prune — never the text itself.
-    # Lives inside get_context so the invariant "every read is audited" holds everywhere.
-    import json
+    # O(1) append-only to prevent blocking dictation latency.
+    # Protected with cross-process file lock so concurrent appends and pruning cannot lose records.
+    # Prunes every 100 writes or daily on elapsed time so low-volume processes also enforce 14-day retention.
+    global _AUDIT_CALLS
     log = pathlib.Path.home() / ".local/share/yawc/context.log"
+    lock_path = pathlib.Path.home() / ".local/share/yawc/context.lock"
+    prune_marker = pathlib.Path.home() / ".local/share/yawc/context.pruned"
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         now = time.time()
-        lines = []
-        if log.exists():
-            for ln in log.read_text().splitlines():
-                try:
-                    if now - json.loads(ln)["ts"] < 14 * 86400:
-                        lines.append(ln)
-                except Exception:
-                    pass
-        lines.append(json.dumps({"ts": int(now), "app": win.get("app_id"),
-                                 "cat": cat,
-                                 "cursor_len": len(win.get("cursor_left", ""))}))
-        log.write_text("\n".join(lines) + "\n")
+        record = json.dumps({"ts": int(now), "app": win.get("app_id"),
+                             "cat": cat,
+                             "cursor_len": len(win.get("cursor_left", ""))}) + "\n"
+        with lock_path.open("a") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                with log.open("a") as f:
+                    f.write(record)
+                _AUDIT_CALLS += 1
+                prune_needed = (_AUDIT_CALLS % 100 == 0)
+                if not prune_needed:
+                    try:
+                        last_prune = prune_marker.stat().st_mtime if prune_marker.exists() else 0.0
+                        if now - last_prune > 86400:
+                            prune_needed = True
+                    except Exception:
+                        pass
+                if prune_needed:
+                    _prune_audit(log, now)
+                    try:
+                        prune_marker.touch()
+                    except Exception:
+                        pass
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except Exception:
         pass
 
@@ -148,8 +190,8 @@ def get_context(timeout_ms: int = 80) -> dict:
     app_id, title = win.get("app_id", "unknown"), win.get("title", "")
     cat = categorize(app_id, title)
     # 04 exclusions: terminals and URL bars never get cursor text read
-    url_bar = "http" in title.lower()
-    if app_id.lower() in TERMINALS or url_bar:
+    url_bar = "http" in (title or "").lower()
+    if (app_id or "").lower() in TERMINALS or url_bar:
         cursor_left, is_pw = "", False
     else:
         cursor_left, is_pw = _atspi_cursor(budget_ms=max(10, timeout_ms - 40))
@@ -161,7 +203,7 @@ def get_context(timeout_ms: int = 80) -> dict:
         ctx = {"app_id": app_id, "cat": cat, "cursor_left": "", "file_tag": "", "skip": "timeout"}
         _audit(ctx, cat)
         return ctx
-    file_tag_m = FILE_RE.search(title) if app_id.lower() in ("code", "cursor", "nvim", "zed") else None
+    file_tag_m = FILE_RE.search(title) if (app_id or "").lower() in ("code", "cursor", "nvim", "zed") else None
     ctx = {"app_id": app_id, "title": title, "cat": cat,
            "cursor_left": cursor_left, "file_tag": file_tag_m.group(0) if file_tag_m else "",
            "is_password": is_pw}
