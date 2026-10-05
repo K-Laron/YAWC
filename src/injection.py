@@ -15,19 +15,27 @@ def _is_password_field() -> bool:
 
 def _clipboard_settled(text: str, cap_s: float = 0.15) -> bool:
     """wl-copy daemonizes — poll until new text is served (<10ms typical).
-    startswith, not ==: clipboard managers may re-serve with trailing newline."""
+    startswith, not ==: clipboard managers may re-serve with trailing newline.
+    Immediate check + progressive delays minimize process spawn overhead while converging fast."""
     deadline = time.time() + cap_s
+    delays = (0.0, 0.005, 0.010, 0.020, 0.025)
+    step = 0
     while time.time() < deadline:
-        if subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout.startswith(text):
+        res = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace")
+        if res.stdout.startswith(text):
             return True
-        time.sleep(0.005)
+        delay = delays[min(step, len(delays) - 1)]
+        if delay > 0:
+            time.sleep(delay)
+        step += 1
     return False
 
 
 def _wtype_paste(text: str, restore: bool) -> bool:
     orig = subprocess.run(["wl-paste"], capture_output=True, text=True, errors="replace").stdout \
         if os.environ.get("WAYLAND_DISPLAY") else ""
-    subprocess.run(["wl-copy"], input=text, text=True)
+    subprocess.run(["wl-copy"], input=text, text=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _clipboard_settled(text)
     try:
         subprocess.run(["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"], timeout=1)
@@ -35,7 +43,8 @@ def _wtype_paste(text: str, restore: bool) -> bool:
         return False
     time.sleep(0.05)  # let the target app read clipboard before restore
     if restore and orig:
-        subprocess.run(["wl-copy"], input=orig, text=True)
+        subprocess.run(["wl-copy"], input=orig, text=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
 
 
@@ -48,9 +57,8 @@ def _ydotool_paste(text: str, restore: bool) -> bool:
         return False
 
 
-
 def inject(text: str, restore: bool = True, is_password: bool | None = None) -> bool:
-    """is_password: fact from the caller's context walk. None = unknown → walk
+    """is_password: fact from the caller's context walk. None = unknown -> walk
     here (safe default for CLI); hot path passes it to skip the second walk."""
     if not text:
         return False
@@ -62,5 +70,6 @@ def inject(text: str, restore: bool = True, is_password: bool | None = None) -> 
         return _wtype_paste(text, restore)
     if shutil.which("ydotool"):
         return _ydotool_paste(text, restore)
-    subprocess.run(["wl-copy"], input=text, text=True)  # last resort: clipboard only
+    subprocess.run(["wl-copy"], input=text, text=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # last resort: clipboard only
     return False

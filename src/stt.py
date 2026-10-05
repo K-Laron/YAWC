@@ -2,12 +2,19 @@
 # ponytail: STT deep module per 01 — faster-whisper large-v3-turbo int8_float16 CUDA,
 # Silero VAD via vad_filter, language=None + task=transcribe (blocks translation),
 # hotwords via initial_prompt. Model singleton — load once, keep hot per 08.
-import os, pathlib
+import array, math, os, pathlib, re
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")  # offline boundary: never fetch at runtime
 MODEL_DIR = pathlib.Path.home() / ".local/share/yawc/models/faster-whisper-large-v3-turbo"
 MODEL_NAME = "large-v3-turbo"
 _model = None
+
+# Precompiled hallucination n-gram patterns
+_DEDUPE_PATS = [
+    re.compile(rf"\b((?:\w+(?:['\-]\w+)?(?:\s+|$)){{{n}}})\1{{2,}}", re.I)
+    for n in (7, 6, 5, 4)
+]
+_WS_RE = re.compile(r"\s+")
 
 
 class ModelMissing(Exception):
@@ -50,26 +57,27 @@ def _load():
     return _model
 
 
-def _wav_is_silence(wav_path: str, thresh: float = 0.008) -> bool:
+def _wav_is_silence(wav_path: str, thresh: float = 0.003) -> bool:
     # ponytail: long silent holds (11s) hallucinate Icelandic/Spanish loops — catch before Whisper
     # Check whole-file RMS; short clips (<0.6s) let Whisper/VAD decide
     try:
-        import struct, math
         p = pathlib.Path(wav_path)
         if not p.exists() or p.stat().st_size <= 44 + 9600:  # <0.3s
             return False
         with open(p, "rb") as f:
             f.seek(44)
             data = f.read()
-        # sample at most 3s evenly to avoid reading huge files fully
         n_total = len(data) // 2
         if n_total < 1024:
             return False
-        # downsample: take every k-th sample for ~32k samples max
+        # Native S16_LE array directly from bytes: zero Python int object allocations
+        samples = array.array("h")
+        samples.frombytes(data[: n_total * 2])
+        # sample at most ~32k samples evenly to avoid scanning huge files fully
         step = max(1, n_total // 32000)
-        samples = struct.unpack(f"<{n_total}h", data[: n_total * 2])[::step]
-        n = len(samples)
-        rms = math.sqrt(sum(s * s for s in samples) / n) / 32768.0
+        sampled = samples[::step]
+        n = len(sampled)
+        rms = math.sqrt(sum(s * s for s in sampled) / n) / 32768.0
         return rms < thresh
     except Exception:
         return False
@@ -78,23 +86,18 @@ def _wav_is_silence(wav_path: str, thresh: float = 0.008) -> bool:
 def _dedupe_hallucination(text: str) -> str:
     # ponytail: Whisper loops on silence/noise — "X X X" where X is 4+ words repeated.
     # Collapse consecutive repeated n-grams (4-7 words) instead of pasting the loop.
-    import re
     if not text:
         return text
-    # quick compression check: highly repetitive text compresses well
     words = text.split()
     if len(words) < 12:
         return text
-    # collapse "phrase, phrase, phrase" -> "phrase"
-    for n in (7, 6, 5, 4):
-        pat = r"\b((?:\w+(?:['-]\w+)?(?:\s+|$)){" + str(n) + r"})\1{2,}"
-        # use case-insensitive for hallucinated English loops
-        m = re.search(pat, text, flags=re.I)
+    # collapse "phrase, phrase, phrase" -> "phrase" using precompiled patterns
+    for pat in _DEDUPE_PATS:
+        m = pat.search(text)
         if m:
-            # keep one copy of the repeated phrase
             text = text[: m.start()] + m.group(1).strip() + text[m.end() :]
             break
-    return re.sub(r"\s+", " ", text).strip()
+    return _WS_RE.sub(" ", text).strip()
 
 
 def transcribe(wav_path: str, hotwords: str = "") -> str:
