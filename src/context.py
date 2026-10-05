@@ -31,7 +31,7 @@ def _niri_window() -> dict:
         out = subprocess.run(["niri", "msg", "-j", "focused-window"],
                              capture_output=True, text=True, timeout=0.03)
         if out.returncode == 0 and out.stdout.strip():
-            return json.loads(out.stdout)
+            return json.loads(out.stdout) or {}
     except Exception:
         pass
     return {}

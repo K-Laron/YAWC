@@ -159,11 +159,12 @@ def _strip_think(text: str) -> str:
 LLM_PIDFILE = pathlib.Path("/tmp/yawc-llama.pid")
 
 
-def _is_pid_alive(pid: int) -> bool:
+def _is_llama_proc(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-        return True
-    except OSError:
+        comm = pathlib.Path(f"/proc/{pid}/comm").read_text().strip()
+        return LLM_BIN in comm or "llama" in comm
+    except (OSError, FileNotFoundError, PermissionError):
         return False
 
 
@@ -176,12 +177,12 @@ def llm_alive() -> bool:
 
 
 def _spawn_llm() -> bool:
-    # 08: lazy cold start — spawn llama-server background, write pidfile, wait healthy <=3s
+    # 08: lazy cold start — spawn llama-server background, write pidfile, wait healthy <=300ms
     global _llm_proc
     if not LLM_MODEL.exists() or not shutil.which(LLM_BIN):
         return False
     if _llm_proc is not None and _llm_proc.poll() is None:
-        for _ in range(30):
+        for _ in range(3):
             time.sleep(0.1)
             if llm_alive():
                 return True
@@ -189,14 +190,16 @@ def _spawn_llm() -> bool:
     if LLM_PIDFILE.exists():
         try:
             pid = int(LLM_PIDFILE.read_text().strip())
-            if _is_pid_alive(pid):
-                for _ in range(30):
+            if _is_llama_proc(pid):
+                for _ in range(3):
                     time.sleep(0.1)
                     if llm_alive():
                         return True
                 return llm_alive()
+            else:
+                LLM_PIDFILE.unlink(missing_ok=True)
         except Exception:
-            pass
+            LLM_PIDFILE.unlink(missing_ok=True)
     cmd = [
         LLM_BIN,
         "-m", str(LLM_MODEL),
@@ -208,10 +211,12 @@ def _spawn_llm() -> bool:
     ]
     _llm_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        LLM_PIDFILE.write_text(str(_llm_proc.pid))
+        LLM_PIDFILE.unlink(missing_ok=True)
+        with LLM_PIDFILE.open("x") as f:
+            f.write(str(_llm_proc.pid))
     except Exception:
         pass
-    for _ in range(30):
+    for _ in range(3):
         time.sleep(0.1)
         if llm_alive():
             return True

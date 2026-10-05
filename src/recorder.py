@@ -101,7 +101,9 @@ class Recorder:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             token = _proc_token(self.proc.pid)
             try:
-                self.pid_file.write_text(f"{self.proc.pid}:{token or ''}")
+                self.pid_file.unlink(missing_ok=True)
+                with self.pid_file.open("x") as f:
+                    f.write(f"{self.proc.pid}:{token or ''}")
             except Exception:
                 pass
 
@@ -124,7 +126,9 @@ class Recorder:
 
             self._busy = True
             try:
-                self.busy_file.write_text(str(os.getpid()))
+                self.busy_file.unlink(missing_ok=True)
+                with self.busy_file.open("x") as f:
+                    f.write(str(os.getpid()))
             except Exception:
                 pass
             self.proc = None
@@ -178,7 +182,7 @@ class Recorder:
                     if self._gen == gen and self.proc is None and not self._is_busy():
                         pill.idle()
 
-            threading.Thread(target=_idle_tail, daemon=True).start()
+            threading.Thread(target=_idle_tail, daemon=False).start()
 
         return result
 

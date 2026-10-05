@@ -100,13 +100,16 @@ def _dedupe_hallucination(text: str) -> str:
     words = text.split()
     if len(words) < 8:
         return text
-    # 4-gram dedupe: slide window, remove if exactly repeats previous 4-gram
+    # 4-gram dedupe: slide window, require at least 3 consecutive copies before deleting
     for n in (6, 5, 4):
         i = 0
-        while i + 2 * n <= len(words):
-            if [w.lower() for w in words[i:i + n]] == [w.lower() for w in words[i + n:i + 2 * n]]:
-                # delete the repeat
-                del words[i + n:i + 2 * n]
+        while i + 3 * n <= len(words):
+            phrase = [w.lower() for w in words[i:i + n]]
+            if phrase == [w.lower() for w in words[i + n:i + 2 * n]] and phrase == [w.lower() for w in words[i + 2 * n:i + 3 * n]]:
+                end = i + n
+                while end + n <= len(words) and phrase == [w.lower() for w in words[end:end + n]]:
+                    end += n
+                del words[i + n:end]
             else:
                 i += 1
     t = " ".join(words)
