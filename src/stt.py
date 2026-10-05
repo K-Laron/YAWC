@@ -37,7 +37,7 @@ def _preload_cuda():
     for c in ("/opt/cuda/lib64", "/usr/local/cuda/lib64", str(pathlib.Path.home() / ".local/lib")):
         if pathlib.Path(c).exists() and c not in dirs:
             dirs.append(c)
-    for pat in ("libcublasLt.so*", "libcublas.so*", "libcudnn*.so*", "libcudart.so*"):
+    for pat in ("libcudart.so*", "libcublasLt.so*", "libcublas.so*", "libcudnn*.so*"):
         for d in dirs:
             for so in sorted(glob.glob(f"{d}/{pat}")):
                 try:
