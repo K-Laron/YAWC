@@ -26,6 +26,6 @@ jobs:
         run: python3 tests/test_yawc.py
       - name: offline grep
         run: |
-          matches=$(grep -rnE 'https?://' src packaging systemd yawc-daemon --exclude-dir=__pycache__ | grep -v '127.0.0.1' | grep -v localhost || true)
+          matches=$(grep -rnEo 'https?://[^"'"'"' )]+' src packaging systemd yawc-daemon --exclude-dir=__pycache__ | grep -vE 'https?://(127\.0\.0\.1|localhost|\[::1\])([:/?#]|$)' || true)
           if [ -n "$matches" ]; then echo "$matches"; exit 1; fi
           echo "offline grep PASS"
