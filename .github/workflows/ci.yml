@@ -29,6 +29,6 @@ jobs:
       - name: offline grep
         run: |
           for p in src packaging systemd yawc-daemon; do test -e "$p" || exit 1; done
-          matches=$(grep -rnEo 'https?://[^"'"'"' )]+' src packaging systemd yawc-daemon --exclude-dir=__pycache__ | grep -vE 'https?://(127\.0\.0\.1|localhost|\[::1\])([:/?#]|$)' || true)
+          matches=$(grep -rniEo 'https?://[^"'"'"' )]+' src packaging systemd yawc-daemon --exclude-dir=__pycache__ | grep -viE 'https?://(127\.0\.0\.1|localhost|\[::1\])([:/?#]|$)' || true)
           if [ -n "$matches" ]; then echo "$matches"; exit 1; fi
           echo "offline grep PASS"
