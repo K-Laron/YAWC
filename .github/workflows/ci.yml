@@ -1,0 +1,31 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: compile
+        run: python3 -m compileall -q src tests eval
+      - name: shell syntax
+        run: |
+          for f in packaging/*.sh yawc-daemon; do bash -n "$f"; done
+      - name: unit tests
+        run: python3 tests/test_yawc.py
+      - name: offline grep
+        run: |
+          matches=$(grep -rnE 'https?://' src packaging systemd yawc-daemon --exclude-dir=__pycache__ | grep -v '127.0.0.1' | grep -v localhost || true)
+          if [ -n "$matches" ]; then echo "$matches"; exit 1; fi
+          echo "offline grep PASS"
