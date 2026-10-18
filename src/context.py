@@ -2,7 +2,7 @@
 # ponytail: Context Engine — retrieve focused app context in <80ms (p95 target 50ms).
 # Reads niri focused window, queries Atspi caret text (±80 chars), tags active file.
 # 04 safety: terminal emulator exclusions, password fields never read, audit log.
-import dataclasses, fcntl, json, os, pathlib, re, subprocess, time
+import dataclasses, fcntl, json, os, pathlib, re, subprocess, threading, time
 
 Atspi = None
 HAS_ATSPI = None
@@ -141,6 +141,8 @@ def _primary_selection() -> str:
 
 TERMINALS = ("foot", "kitty", "alacritty", "wezterm", "gnome-terminal", "t3code", "code", "terminal")
 _AUDIT_CALLS = 0
+_PRUNING = False
+_PRUNE_LOCK = threading.Lock()
 
 
 def _prune_audit(log: pathlib.Path, now: float) -> None:
@@ -158,11 +160,41 @@ def _prune_audit(log: pathlib.Path, now: float) -> None:
         pass
 
 
+def _maybe_prune_async(log: pathlib.Path, lock_path: pathlib.Path, prune_marker: pathlib.Path, now: float) -> None:
+    global _PRUNING
+    with _PRUNE_LOCK:
+        if _PRUNING:
+            return
+        _PRUNING = True
+
+    def _worker():
+        global _PRUNING
+        try:
+            with lock_path.open("a") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    _prune_audit(log, now)
+                    try:
+                        prune_marker.touch()
+                    except Exception:
+                        pass
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        finally:
+            with _PRUNE_LOCK:
+                _PRUNING = False
+
+    t = threading.Thread(target=_worker, name="yawc-audit-prune", daemon=True)
+    t.start()
+
+
 def _audit(win: dict, cat: str) -> None:
     # 04: on-device audit log of every context read, 14-day prune — never the text itself.
     # O(1) append-only to prevent blocking dictation latency.
     # Protected with cross-process file lock so concurrent appends and pruning cannot lose records.
-    # Prunes every 100 writes or daily on elapsed time so low-volume processes also enforce 14-day retention.
+    # Pruning runs asynchronously outside the critical write lock to prevent 10-50ms latency spikes.
     global _AUDIT_CALLS
     log = pathlib.Path.home() / ".local/share/yawc/context.log"
     lock_path = pathlib.Path.home() / ".local/share/yawc/context.lock"
@@ -173,6 +205,7 @@ def _audit(win: dict, cat: str) -> None:
         record = json.dumps({"ts": int(now), "app": win.get("app_id"),
                              "cat": cat,
                              "cursor_len": len(win.get("cursor_left", ""))}) + "\n"
+        prune_needed = False
         with lock_path.open("a") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
@@ -187,14 +220,10 @@ def _audit(win: dict, cat: str) -> None:
                             prune_needed = True
                     except Exception:
                         pass
-                if prune_needed:
-                    _prune_audit(log, now)
-                    try:
-                        prune_marker.touch()
-                    except Exception:
-                        pass
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        if prune_needed:
+            _maybe_prune_async(log, lock_path, prune_marker, now)
     except Exception:
         pass
 
