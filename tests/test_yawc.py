@@ -46,6 +46,22 @@ check("context shape", {"app_id", "cat", "cursor_left"} <= set(ctx))
 t0 = time.time(); get_context(timeout_ms=80); dt = (time.time() - t0) * 1000
 check("context within 3x budget", dt < 240)
 
+# context audit prune — async prune drops entries older than 14 days without blocking
+import src.context as _ctxmod_prune
+with tempfile.TemporaryDirectory() as td:
+    t_log = pathlib.Path(td) / "context.log"
+    t_lock = pathlib.Path(td) / "context.lock"
+    t_marker = pathlib.Path(td) / "context.pruned"
+    stale_ts = time.time() - 15 * 86400
+    fresh_ts = time.time()
+    t_log.write_text(f'{{"ts": {int(stale_ts)}, "app": "old"}}\n{{"ts": {int(fresh_ts)}, "app": "new"}}\n')
+    _ctxmod_prune._maybe_prune_async(t_log, t_lock, t_marker, time.time())
+    deadline = time.time() + 1.0
+    while time.time() < deadline and not t_marker.exists():
+        time.sleep(0.01)
+    pruned_lines = t_log.read_text().splitlines()
+    check("audit async prune", len(pruned_lines) == 1 and "new" in pruned_lines[0])
+
 # stt — guarded degrade without model
 from src import stt
 if not stt.available():
