@@ -4,13 +4,28 @@
 # 04 safety: terminal emulator exclusions, password fields never read, audit log.
 import dataclasses, fcntl, json, os, pathlib, re, subprocess, time
 
-try:
-    import gi
-    gi.require_version("Atspi", "2.0")
-    from gi.repository import Atspi
-    HAS_ATSPI = True
-except Exception:
-    HAS_ATSPI = False
+Atspi = None
+HAS_ATSPI = None
+
+
+def _ensure_atspi() -> bool:
+    global Atspi, HAS_ATSPI
+    if HAS_ATSPI is not None:
+        return HAS_ATSPI
+    try:
+        import gi
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi as _Atspi
+        Atspi = _Atspi
+        HAS_ATSPI = True
+    except Exception:
+        HAS_ATSPI = False
+    return HAS_ATSPI
+
+
+def warmup() -> None:
+    """Pre-warm Atspi and cache module initialization."""
+    _ensure_atspi()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,7 +68,7 @@ def categorize(app_id: str, title: str) -> str:
 
 def _walk_focused(deadline: float):
     """Find focused accessible object within time budget; None if slow."""
-    if not HAS_ATSPI:
+    if not _ensure_atspi():
         return None
     try:
         desktop = Atspi.get_desktop(0)
@@ -98,7 +113,7 @@ def _find_caret(node, deadline: float, depth: int = 0):
 
 def _atspi_cursor(budget_ms: int = 40) -> tuple[str, bool]:
     """(cursor_left ±80 chars, is_password). Empty if nothing found in budget."""
-    if not HAS_ATSPI:
+    if not _ensure_atspi():
         return "", False
     deadline = time.time() + budget_ms / 1000
     node = _walk_focused(deadline)
